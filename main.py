@@ -20,7 +20,11 @@ from pathlib import Path
 if getattr(sys, 'frozen', False):
     # Running as compiled PyInstaller executable
     ROOT       = Path(sys.executable).parent.resolve()
-    BRIDGE_DIR = ROOT          # bridge modules bundled inside exe
+    BRIDGE_DIR = ROOT
+    # PyInstaller unpacks to sys._MEIPASS — add it to path
+    if hasattr(sys, '_MEIPASS'):
+        sys.path.insert(0, sys._MEIPASS)
+    sys.path.insert(0, str(ROOT))
 else:
     # Running as plain Python script
     ROOT       = Path(__file__).parent.resolve()
@@ -56,8 +60,19 @@ def main():
         if getattr(args, 'verbose', False): argv.append('--verbose')
         if getattr(args, 'no_browser', False): argv.append('--no-browser')
 
-        from bridge import cli_main
-        cli_main(argv)
+        # If running as exe, check for external bridge.py sidecar first
+        # This allows updating bridge.py without rebuilding the exe
+        external_bridge = ROOT / 'bridge' / 'bridge.py'
+        if getattr(sys, 'frozen', False) and external_bridge.exists():
+            import runpy, types
+            sys.argv = argv
+            # Set up path so bridge can import its siblings
+            sys.path.insert(0, str(ROOT / 'bridge'))
+            sys.path.insert(0, str(ROOT))
+            runpy.run_path(str(external_bridge), run_name='__main__')
+        else:
+            from bridge import cli_main
+            cli_main(argv)
     else:
         parser.print_help()
 
