@@ -914,6 +914,172 @@ async def system_test():
     return results
 
 
+# ── Auth system ───────────────────────────────────────────────────────────────
+import hashlib, hmac
+
+def _users_file() -> Path:
+    return DATA_DIR / "users.json"
+
+def _sessions_file() -> Path:
+    return DATA_DIR / "sessions.json"
+
+def _load_users() -> dict:
+    f = _users_file()
+    if f.exists():
+        try:
+            with open(f) as fp: return json.load(fp)
+        except: pass
+    return {}
+
+def _save_users(data: dict):
+    _users_file().parent.mkdir(parents=True, exist_ok=True)
+    with open(_users_file(), 'w') as fp: json.dump(data, fp, indent=2)
+
+def _load_sessions() -> dict:
+    f = _sessions_file()
+    if f.exists():
+        try:
+            with open(f) as fp: return json.load(fp)
+        except: pass
+    return {}
+
+def _save_sessions(data: dict):
+    with open(_sessions_file(), 'w') as fp: json.dump(data, fp, indent=2)
+
+def _hash_password(password: str, salt: str = None) -> tuple:
+    if not salt:
+        salt = uuid.uuid4().hex
+    h = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 260000)
+    return h.hex(), salt
+
+def _verify_password(password: str, stored_hash: str, salt: str) -> bool:
+    h, _ = _hash_password(password, salt)
+    return hmac.compare_digest(h, stored_hash)
+
+def _get_user_from_session(token: str) -> dict:
+    sessions = _load_sessions()
+    if token not in sessions: return None
+    user_id = sessions[token]
+    users = _load_users()
+    return users.get(user_id)
+
+class AuthRequest(BaseModel):
+    name:     str = ""
+    email:    str = ""
+    password: str = ""
+
+class LoginRequest(BaseModel):
+    email:    str = ""
+    password: str = ""
+
+@app.post("/auth/signup")
+async def auth_signup(req: AuthRequest):
+    if not req.email or not req.password:
+        raise HTTPException(400, "Email and password required")
+    users = _load_users()
+    # Check email not taken
+    for u in users.values():
+        if u.get("email", "").lower() == req.email.lower():
+            raise HTTPException(409, "An account with that email already exists")
+    user_id = "user_" + uuid.uuid4().hex[:12]
+    pw_hash, salt = _hash_password(req.password)
+    user = {
+        "id":         user_id,
+        "name":       req.name or req.email.split("@")[0],
+        "email":      req.email.lower(),
+        "pw_hash":    pw_hash,
+        "salt":       salt,
+        "created_at": datetime.now().isoformat(),
+    }
+    users[user_id] = user
+    _save_users(users)
+    # Create session
+    token = uuid.uuid4().hex
+    sessions = _load_sessions()
+    sessions[token] = user_id
+    _save_sessions(sessions)
+    _log("info", f"New user: {user['name']} ({user['email']})")
+    return {"token": token, "user": {"id": user_id, "name": user["name"], "email": user["email"]}}
+
+@app.post("/auth/login")
+async def auth_login(req: LoginRequest):
+    if not req.email or not req.password:
+        raise HTTPException(400, "Email and password required")
+    users = _load_users()
+    found = None
+    for u in users.values():
+        if u.get("email", "").lower() == req.email.lower():
+            found = u; break
+    if not found or not _verify_password(req.password, found["pw_hash"], found["salt"]):
+        raise HTTPException(401, "Invalid email or password")
+    token = uuid.uuid4().hex
+    sessions = _load_sessions()
+    sessions[token] = found["id"]
+    _save_sessions(sessions)
+    _log("info", f"Login: {found['name']}")
+    return {"token": token, "user": {"id": found["id"], "name": found["name"], "email": found["email"]}}
+
+@app.get("/auth/me")
+async def auth_me(authorization: str = None, request: Request = None):
+    token = None
+    if request:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        raise HTTPException(401, "No session token")
+    user = _get_user_from_session(token)
+    if not user:
+        raise HTTPException(401, "Session expired or invalid")
+    return {"user": {"id": user["id"], "name": user["name"], "email": user["email"]}}
+
+@app.post("/auth/logout")
+async def auth_logout(request: Request):
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+    if token:
+        sessions = _load_sessions()
+        sessions.pop(token, None)
+        _save_sessions(sessions)
+    return {"status": "logged_out"}
+
+@app.get("/auth/export")
+async def auth_export(request: Request):
+    """Export all account data — for backup and device transfer."""
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+    user = _get_user_from_session(token) if token else None
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    companies = {k: v for k, v in _load_companies().items()
+                 if v.get("user_id") == user["id"]}
+    return {
+        "export_version": "1.0",
+        "exported_at":    datetime.now().isoformat(),
+        "user":           {"id": user["id"], "name": user["name"], "email": user["email"]},
+        "companies":      list(companies.values()),
+    }
+
+@app.post("/auth/import")
+async def auth_import(request: Request):
+    """Import account data from a backup export file."""
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+    user = _get_user_from_session(token) if token else None
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    body = await request.json()
+    companies_data = body.get("companies", [])
+    existing = _load_companies()
+    imported = 0
+    for co in companies_data:
+        co["user_id"] = user["id"]  # reassign to current user
+        existing[co["id"]] = co
+        imported += 1
+    _save_companies(existing)
+    return {"status": "imported", "count": imported}
+
+
 # ── Company registry ──────────────────────────────────────────────────────────
 def _companies_file() -> Path:
     return DATA_DIR / "companies.json"
@@ -953,8 +1119,15 @@ def _auto_migrate_paperteam():
     _log("info", f"Auto-migrated '{proj_name}' as company record")
 
 @app.get("/companies")
-def list_companies():
+async def list_companies(request: Request):
     companies = _load_companies()
+    auth_hdr = request.headers.get("authorization", "")
+    token = auth_hdr[7:] if auth_hdr.startswith("Bearer ") else None
+    if token:
+        user = _get_user_from_session(token)
+        if user:
+            companies = {k: v for k, v in companies.items()
+                        if not v.get("user_id") or v.get("user_id") == user["id"]}
     return {"companies": list(companies.values())}
 
 @app.post("/companies")
@@ -965,6 +1138,10 @@ async def create_company(request: Request):
     # Deactivate others if this is set active
     if body.get("active"):
         for c in companies.values(): c["active"] = False
+    # Get user from session token if provided
+    auth_hdr = request.headers.get("authorization", "")
+    session_token = auth_hdr[7:] if auth_hdr.startswith("Bearer ") else None
+    session_user = _get_user_from_session(session_token) if session_token else None
     companies[cid] = {
         "id":           cid,
         "display_name": body.get("display_name", ""),
@@ -972,6 +1149,7 @@ async def create_company(request: Request):
         "logo_path":    body.get("logo_path", ""),
         "project_path": body.get("project_path", ""),
         "active":       body.get("active", False),
+        "user_id":      session_user["id"] if session_user else body.get("user_id", ""),
         "created_at":   datetime.now().isoformat(),
         "updated_at":   datetime.now().isoformat(),
     }
