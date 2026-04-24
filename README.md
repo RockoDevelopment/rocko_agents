@@ -1,18 +1,37 @@
 # RockoAgents
 
-Self-hosted local agent orchestration platform. One command. No cloud. No account required.
+Self-hosted local agent orchestration. No Python required for end users.
 
 ---
 
-## What it is
+## For Users — Download and Run
 
-RockoAgents is a complete alternative to Paperclip that runs entirely on your machine. You create a company, build a team of agents, connect your scripts or external tools, and the platform handles everything — pipeline execution, task queuing, scheduling, CEO orchestration, and human approval gates.
+Download the latest release from GitHub Releases:
 
-**Company** is the user-facing workspace. **Project** is the technical manifest underneath. You never need to edit project.json unless you want to.
+- **Windows** → `rocko.exe`
+- **Mac** → `rocko`
+
+Place the executable in your `RockoAgentHub` folder alongside `index.html`. Then:
+
+**Windows:**
+```
+rocko.exe run
+```
+or just double-click `rocko.exe`.
+
+**Mac:**
+```
+chmod +x rocko
+./rocko run
+```
+
+That is it. No Python required. No install step. No venv.
 
 ---
 
-## Quickstart
+## For Developers — Run from source
+
+Requires Python 3.x (any version).
 
 ```
 cd RockoAgentHub
@@ -20,17 +39,18 @@ pip install -e .
 rocko run
 ```
 
-First run shows the company creation screen. After that it goes straight to your workspace.
+`pip install -e .` only needs to run once. It registers the `rocko` command globally.
 
 ---
 
-## Prerequisites
+## Building the executable yourself
 
-- Python 3.x — any version
-- Chrome or Edge — for the app window
-- An Anthropic API key, or any OpenAI-compatible endpoint
+```
+pip install pyinstaller
+python build.py
+```
 
-No Node.js. No npm. No Docker.
+Outputs `rocko.exe` (Windows) or `rocko` (Mac) in the repo root. ~25MB single file.
 
 ---
 
@@ -38,11 +58,15 @@ No Node.js. No npm. No Docker.
 
 ```
 RockoAgentHub/
-├── index.html
-├── skills.json             Custom/fallback skill definitions
-├── pyproject.toml
-├── rockoagents/
-│   └── cli.py
+├── rocko.exe / rocko       ← Compiled executable (download from releases)
+├── main.py                 ← PyInstaller entry point / developer run
+├── build.py                ← Build script
+├── rocko.spec              ← PyInstaller specification
+├── index.html              ← Full UI
+├── skills.json             ← Custom/fallback skill definitions
+├── .github/
+│   └── workflows/
+│       └── build.yml       ← Auto-builds exe on every tagged release
 ├── bridge/
 │   ├── bridge.py
 │   ├── model_manager.py
@@ -50,213 +74,140 @@ RockoAgentHub/
 │   ├── scheduler.py
 │   ├── orchestrator.py
 │   └── runtime_manager.py
-├── projects/
-│   └── ThePaperTeam/
-│       ├── project.json
-│       └── agents/
-└── data/rockoagents/
-    ├── companies.json
-    ├── tasks.json
-    ├── schedules.json
-    └── pipeline_runs.json
+└── projects/
+    └── ThePaperTeam/
 ```
 
 ---
 
-## Company layer
+## How it works
 
-When RockoAgents opens with no company, you see the creation screen. Enter a company name, description, folder path, and optional logo. That becomes your workspace. Everything — agents, pipeline, tasks, history — is scoped to the active company.
-
-The company rail on the left shows all your companies as logo icons. Click to switch instantly.
-
-ThePaperTeam is auto-migrated as your first company if it was already loaded.
+`rocko run` starts the bridge (a local FastAPI server on port 8787), opens `index.html` in Edge or Chrome as a standalone app window, and keeps running in the terminal showing live request logs. The bridge handles all automation state — agents, tasks, schedules, pipeline runs — and writes everything to disk so nothing is lost on restart.
 
 ---
 
-## Skills system — powered by skills.sh
+## First run
 
-Skills are reusable `SKILL.md` instruction files hosted on GitHub. The [skills.sh](https://skills.sh) directory lists thousands of community-published skills compatible with Claude Code, Copilot, Cursor, and other agents.
+If no company exists, you see the company creation screen. Enter a company name, description, and local folder path. After that it goes straight to your workspace every time.
 
-**RockoAgents integrates directly with this ecosystem.**
+ThePaperTeam auto-loads if it was already configured.
 
-### How it works
+---
 
-The CEO agent can browse skills.sh and assign skills to other agents as part of its orchestration decisions. When a skill is assigned, RockoAgents fetches the `SKILL.md` from GitHub and appends its instructions to the target agent's system prompt.
+## Skills — powered by skills.sh
 
-### CEO assigning a skill
+[skills.sh](https://skills.sh) is Vercel's open agent skills directory. Skills are `SKILL.md` instruction files from GitHub used by Claude Code, Copilot, Cursor, and other agents.
 
-The CEO returns a structured JSON decision:
+RockoAgents integrates directly. The CEO agent can assign skills to other agents:
 
 ```json
 {
   "decision": "assign_skill",
-  "reason": "The research agent needs better synthesis methodology for this task",
   "target_agent_id": "research_agent",
   "skill_repo": "anthropics/skills",
   "skill_name": "skill-creator",
-  "requires_human_approval": false,
-  "allow_execution": false
+  "reason": "This agent needs better methodology for complex tasks"
 }
 ```
 
-The bridge fetches `https://github.com/anthropics/skills/blob/main/skills/skill-creator/SKILL.md`, parses the frontmatter and instruction content, and appends it to the target agent's prompt. The skill is cached locally in `.rocko_skills/` for offline use.
+The bridge fetches the `SKILL.md` from GitHub and appends it to the target agent's instructions. Cached locally in `.rocko_skills/` for offline use.
 
-### Manual skill assignment
-
-Open any agent → Skills section → **Manage Skills**. The modal browses the live skills.sh leaderboard. Find a skill, click Apply. The SKILL.md is fetched from GitHub and applied.
-
-### Bridge endpoints
-
-```
-GET  /skills              Local skills.json (custom/fallback)
-GET  /skills/browse       Live skills.sh leaderboard (trending skills)
-GET  /skills/fetch?repo=owner/repo&skill=name   Fetch a specific SKILL.md
-POST /skills/assign       Assign a skill to an agent (CEO uses this)
-```
-
-### Skills.sh
-
-Skills.sh is Vercel's open agent skills directory — a leaderboard of SKILL.md files from GitHub used by Claude Code, GitHub Copilot, Cursor, Gemini CLI, and many others. Any skill in this ecosystem works with RockoAgents.
-
-Browse at: https://skills.sh
-
-Popular skills include:
-- `anthropics/skills` — frontend-design, docx, pptx, pdf, skill-creator
-- `vercel-labs/agent-skills` — React best practices, web design guidelines
-- `microsoft/azure-skills` — Azure integration skills
-- And thousands more from the community
+Browse skills manually: Agents tab → any agent → Manage Skills.
 
 ---
 
-## Hire and Fire
-
-**Hiring an agent:**
-Click **+ Hire Agent** in the Agents tab. Choose a role, name, description, and initial instructions.
-
-**Firing an agent:**
-Open any agent → click **⊘ Fire**. The agent is deactivated, removed from the active pipeline, and preserved in history. Click **↩ Reinstate** to restore.
-
-**CEO-triggered hire/fire:**
-
-CEO can return:
-
-```json
-{
-  "decision": "hire_agent",
-  "reason": "Need a dedicated compliance reviewer for this pipeline",
-  "agent_name": "Compliance Reviewer",
-  "agent_role": "analyst"
-}
-```
-
-```json
-{
-  "decision": "fire_agent",
-  "reason": "Research agent consistently produces low-confidence outputs",
-  "target_agent_id": "research_agent"
-}
-```
-
----
-
-## CEO Orchestration
-
-Full decision types the CEO can return:
+## CEO decisions
 
 | Decision | Action |
 |---|---|
-| `approve` | Continue — human gate shown if executor steps exist |
-| `reject` | Halt — archived as rejected |
+| `approve` | Continue with human gate if executor steps exist |
+| `reject` | Halt pipeline |
 | `hold` | Pause for human review |
 | `rerun` | Re-run a step with modified input |
 | `skip` | Skip a step |
-| `request_info` | Re-run an agent with a focused question |
-| `create_task` | Spawn follow-up tasks into the worker queue |
-| `escalate` | Route to human approval |
+| `request_info` | Re-run an agent with focused question |
+| `create_task` | Spawn tasks into the worker queue |
+| `escalate` | Human approval overlay |
 | `log_only` | Record and stop |
 | `pause_pipeline` | Pause for later |
-| `assign_skill` | Fetch a skill from skills.sh and apply to an agent |
+| `assign_skill` | Fetch skill from skills.sh and apply to agent |
 | `hire_agent` | Create a new agent |
-| `fire_agent` | Deactivate an underperforming agent |
-
-**Safety rule:** If the pipeline contains any executor or runtime step, human approval is always required — regardless of what the CEO returns.
+| `fire_agent` | Deactivate underperforming agent |
 
 ---
 
 ## External runtimes
 
-Connect any external agent system as a worker. Add to `project.json`:
+Connect OpenClaw, Claude Code, local HTTP agents, or webhooks via `project.json`:
 
 ```json
 "runtimes": {
-  "openclaw_research": {
+  "openclaw": {
     "type": "cli",
     "command": "openclaw",
     "args": ["run", "--agent", "researcher"],
-    "working_dir": "{{PROJECT_ROOT}}",
     "input_mode": "stdin_json",
     "output_mode": "stdout_json",
-    "timeout_seconds": 300,
     "risk_level": "read_only",
     "allowed_agents": ["ceo_agent"]
   }
 }
 ```
 
-Supported types: `cli`, `http`, `webhook`, `mcp` (reserved).
-
-Risk levels: `read_only` runs normally. `write` runs with optional approval. `deploy` and `financial` always require human approval.
-
 ---
 
-## Automation
+## NVIDIA model support
 
-**Task Worker** — background worker processes the queue continuously. No manual intervention needed.
+RockoAgents supports NVIDIA-hosted models through your own NVIDIA API key. RockoAgents does not provide or pay for NVIDIA model access — you bring your own key.
 
-**Scheduler** — cron or interval schedules for any agent, pipeline, executor, or runtime. Persists across bridge restarts. Scheduled runs still stop at approval gates.
+Add to `.env`:
+```
+NVIDIA_API_KEY=nvapi-your-key-here
+```
 
----
-
-## Model configuration
-
-All config in `project.json`. Nothing hardcoded:
-
+Add to `project.json`:
 ```json
 "model": {
-  "default_provider": "anthropic",
-  "default_model": "claude-sonnet-4-20250514",
-  "fallback_model": "claude-haiku-4-5-20251001",
   "providers": {
-    "anthropic": { "type": "anthropic", "api_key_env": "ANTHROPIC_API_KEY" },
-    "openai":    { "type": "openai_compatible", "api_base": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY" },
-    "local":     { "type": "openai_compatible", "api_base": "http://localhost:11434/v1" }
+    "nvidia": {
+      "type": "openai_compatible",
+      "api_base": "https://integrate.api.nvidia.com/v1",
+      "api_key_env": "NVIDIA_API_KEY",
+      "available_models": [
+        "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+        "meta/llama-3.1-70b-instruct",
+        "meta/llama-3.3-70b-instruct",
+        "deepseek-ai/deepseek-r1",
+        "mistralai/mixtral-8x7b-instruct-v0.1",
+        "google/gemma-3-27b-it",
+        "microsoft/phi-4",
+        "qwen/qwen2.5-72b-instruct"
+      ]
+    }
   }
 }
 ```
 
-Override per agent: `"model_override": "claude-opus-4-20250514"`
+Per-agent override:
+```json
+{ "id": "research_agent", "model_override": "deepseek-ai/deepseek-r1" }
+```
 
----
+The CEO can run on Anthropic while analysts run on NVIDIA, or any combination. The Orchestration tab shows each provider's key status — present or missing — without exposing the actual key value. Use Test Connection to verify your key works before running agents.
 
-## System verification
+Get an NVIDIA API key at: https://build.nvidia.com/
 
-Settings → **⚙ System Test** — verifies all subsystems and returns pass/warn/fail per component.
-
----
 
 ## Compared to Paperclip
 
 | | Paperclip | RockoAgents |
 |---|---|---|
-| Start | `pnpm paperclipai run` | `rocko run` |
-| Setup | Node + PostgreSQL | `pip install -e .` |
+| Start | `pnpm paperclipai run` | `rocko run` (or double-click exe) |
+| Requirements | Node.js + pnpm | Nothing (compiled exe) |
 | Company layer | Yes | Yes |
-| Agent hire/fire | No | Yes — human and CEO-triggered |
 | Skills system | No | Yes — live from skills.sh |
+| Agent hire/fire | No | Yes |
 | External runtimes | Via integrations | CLI, HTTP, webhook |
-| Task queue | Yes | Yes — auto-worker |
-| Scheduling | Yes | Yes — APScheduler |
-| CEO orchestration | Approve/reject | 13 decision types including skill assignment |
-| Approval gates | Yes | Yes — cannot be bypassed |
+| CEO orchestration | Approve/reject | 13 decision types |
 | Desktop app | No | Yes — PWA |
 | Cloud required | Yes | No |

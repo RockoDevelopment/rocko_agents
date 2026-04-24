@@ -205,6 +205,10 @@ def validate_project() -> Dict:
         import model_manager as mm
         prov_status = mm.get_provider_status(PROJECT_ROOT)
         checks["providers"] = prov_status
+        # Warn if NVIDIA configured but key missing
+        for prov_key, prov_info in prov_status.items():
+            if prov_info.get("key_required") and prov_info.get("configured_in_project") and not prov_info.get("key_present"):
+                warns.append(f"Provider '{prov_key}': key missing — set {prov_info.get('env_var','?')} in .env")
     return {"valid": len(errors) == 0, "errors": errors, "warns": warns, "checks": checks}
 
 # ── Executor runner ───────────────────────────────────────────────────────────
@@ -658,6 +662,37 @@ def orchestrate_decisions():
 def model_providers():
     if not _model_mgr: raise HTTPException(503, "Model manager not initialised")
     return _model_mgr.get_provider_status(PROJECT_ROOT)
+
+@app.post("/models/providers/{provider_id}/test")
+async def test_provider(provider_id: str):
+    """Test a provider connection — checks key presence and does a minimal API call."""
+    if not _model_mgr:
+        raise HTTPException(503, "Model manager not initialised")
+    import model_manager as mm
+    status = mm.get_provider_status(PROJECT_ROOT)
+    prov = status.get(provider_id)
+    if not prov:
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
+    if not prov.get("key_present"):
+        return {"ok": False, "provider": provider_id,
+                "error": f"API key missing — set {prov.get('env_var','?')} in .env",
+                "key_present": False}
+    # Do a minimal test call — list models or do a tiny completion
+    try:
+        env   = mm.load_env(PROJECT_ROOT)
+        key   = env.get(prov.get("env_var","")) if prov.get("env_var") else None
+        base  = prov.get("api_base","")
+        # For all OpenAI-compatible providers: try GET /models
+        import urllib.request as _ur
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        req = _ur.Request(base.rstrip("/") + "/models", headers=headers)
+        with _ur.urlopen(req, timeout=8) as r:
+            r.read()
+        return {"ok": True, "provider": provider_id, "key_present": True,
+                "message": f"Connection to {provider_id} successful"}
+    except Exception as e:
+        return {"ok": False, "provider": provider_id, "key_present": True,
+                "error": f"Connection failed: {str(e)[:200]}"}
 
 @app.get("/models/config")
 def model_config():

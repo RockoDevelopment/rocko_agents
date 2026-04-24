@@ -475,6 +475,30 @@ body { display:flex; flex-direction:row; overflow:hidden; }
 .login-divider{border:none;border-top:1px solid var(--border);margin:24px 0;}
 .user-avatar{width:28px;height:28px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-family:var(--cond);font-size:13px;font-weight:700;color:#000;flex-shrink:0;}
 
+
+/* ── Provider cards ──────────────────────────────────────────── */
+.provider-card{background:var(--bg-card);border:1px solid var(--border);padding:14px 16px;margin-bottom:10px;transition:border-color .15s;}
+.provider-card:hover{border-color:var(--border-bright);}
+.provider-card.active-provider{border-color:var(--accent);}
+.provider-header{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
+.provider-icon{width:36px;height:36px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;font-weight:700;font-family:var(--cond);}
+.provider-icon.anthropic{background:rgba(255,107,0,.15);color:#ff6b00;}
+.provider-icon.openai{background:rgba(0,200,100,.12);color:#00c864;}
+.provider-icon.nvidia{background:rgba(118,185,0,.15);color:#76b900;}
+.provider-icon.local{background:rgba(71,130,255,.12);color:var(--accent);}
+.provider-icon.custom{background:rgba(255,255,255,.06);color:var(--text-dim);}
+.provider-name{font-family:var(--cond);font-size:16px;font-weight:700;letter-spacing:1px;}
+.provider-base-url{font-family:var(--mono);font-size:10px;color:var(--text-dim);}
+.provider-key-status{display:flex;align-items:center;gap:8px;margin:8px 0;font-family:var(--mono);font-size:11px;}
+.key-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.key-dot.present{background:var(--green);}
+.key-dot.missing{background:var(--red);}
+.provider-models{font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:6px;line-height:1.7;}
+.provider-note{font-size:11px;color:var(--yellow);background:rgba(255,209,102,.06);border:1px solid rgba(255,209,102,.2);padding:6px 10px;margin-top:8px;line-height:1.5;}
+.provider-actions{display:flex;gap:6px;margin-top:10px;}
+.model-select-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.model-select-row label{font-family:var(--mono);font-size:10px;color:var(--text-dim);width:80px;flex-shrink:0;}
+
 </style>
 <style>
 /* v4 additions */
@@ -1012,7 +1036,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
           <!-- Model Status -->
           <div style="display:flex;flex-direction:column;gap:12px;">
             <div class="auto-panel">
-              <div class="auto-panel-title">Model Configuration</div>
+              <div class="auto-panel-title">Model Providers <span id="providerCount" style="color:var(--text-dim)"></span></div>
               <div id="modelProviderStatus"></div>
             </div>
             <div class="auto-panel">
@@ -2753,248 +2777,84 @@ async function loadApprovals() {
 // MODEL STATUS
 // ═══════════════════════════════════════════════════════════════
 async function loadModelStatus() {
-  const el = document.getElementById('modelProviderStatus');
+  var el = document.getElementById('modelProviderStatus');
   if (!el) return;
-  const d = await bridgeGet('/models/providers');
-  if (!d) { el.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text-dim)">Bridge offline — model status unavailable</div>'; return; }
+  var d = await bridgeGet('/models/providers');
+  if (!d) {
+    el.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text-dim)">Bridge offline — provider status unavailable</div>';
+    return;
+  }
+  var cnt = document.getElementById('providerCount');
+  if (cnt) cnt.textContent = Object.keys(d).length + ' provider(s)';
   el.innerHTML = '';
+  var iconMap = {anthropic:'A', openai:'O', nvidia:'N', local:'L'};
+  var clsMap  = {anthropic:'anthropic', openai:'openai', nvidia:'nvidia', local:'local'};
   Object.entries(d).forEach(function(pair) {
-    const prov = pair[0], cfg = pair[1];
-    const row = document.createElement('div');
-    row.className = 'model-row';
-    row.innerHTML =
-      '<span class="model-key">' + prov + '</span>' +
-      '<span class="model-val" style="display:flex;align-items:center;gap:8px;">' +
-        (cfg.type === 'local'
-          ? '<span class="key-badge key-present">LOCAL</span>'
-          : '<span class="key-badge ' + (cfg.key_present ? 'key-present' : 'key-missing') + '">' +
-            (cfg.key_present ? 'KEY ✓' : 'KEY ✕') + '</span>'
-        ) +
-        '<span style="font-size:10px;color:var(--text-dim)">' + (cfg.env_var || '') + '</span>' +
-      '</span>';
-    el.appendChild(row);
+    var provId = pair[0], cfg = pair[1];
+    var isLocal = cfg.type === 'local' || !cfg.key_required;
+    var keyOk   = isLocal || cfg.key_present;
+    var card    = document.createElement('div');
+    card.className = 'provider-card' + (cfg.configured_in_project ? ' active-provider' : '');
+    var models = cfg.available_models ? cfg.available_models.slice(0,4).join(', ') + (cfg.available_models.length > 4 ? '...' : '') : '';
+    var noteHtml = cfg.note ? '<div class="provider-note">&#8505; ' + cfg.note + '</div>' : '';
+    var userBadge = cfg.user_owned ? '<span style="font-family:var(--mono);font-size:9px;padding:1px 6px;background:rgba(118,185,0,.1);border:1px solid rgba(118,185,0,.3);color:#76b900;margin-left:6px;">USER-OWNED KEY</span>' : '';
+    card.innerHTML =
+      '<div class="provider-header">' +
+        '<div class="provider-icon ' + (clsMap[provId]||'custom') + '">' + (iconMap[provId]||provId.charAt(0).toUpperCase()) + '</div>' +
+        '<div style="flex:1;">' +
+          '<div class="provider-name">' + (cfg.display_name || provId.toUpperCase()) + userBadge + '</div>' +
+          '<div class="provider-base-url">' + (cfg.api_base || '') + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="provider-key-status">' +
+        '<div class="key-dot ' + (keyOk ? 'present' : 'missing') + '"></div>' +
+        (isLocal
+          ? '<span style="color:var(--green)">No API key required</span>'
+          : keyOk
+            ? '<span style="color:var(--green)">API key detected</span> <span style="color:var(--text-dim);font-size:10px;">' + (cfg.env_var||'') + '</span>'
+            : '<span style="color:var(--red)">Key missing</span> <span style="color:var(--text-dim);font-size:10px;">Set ' + (cfg.env_var||'?') + ' in .env</span>') +
+      '</div>' +
+      (models ? '<div class="provider-models">Models: ' + models + '</div>' : '') +
+      noteHtml +
+      '<div class="provider-actions">' +
+        (keyOk ? '<button class="btn btn-ghost" style="font-size:10px;padding:4px 10px;" onclick="testProvider(\'' + provId + '\')">Test Connection</button>' : '') +
+      '</div>';
+    el.appendChild(card);
   });
-
-  // Agent model overrides
-  const agEl = document.getElementById('agentModelList');
-  if (!agEl) return;
-  const proj = RockoCore.getActiveProject();
-  const agents = RockoCore.getAgents(proj);
-  if (!agents.length) { agEl.innerHTML = '<div class="empty-state">No agents loaded.</div>'; return; }
-  agEl.innerHTML = '';
-  const manifest = RockoCore.getProject(proj);
-  const defaultModel = manifest?.model?.default_model || '--';
-  agents.forEach(function(a) {
-    const row = document.createElement('div');
-    row.className = 'model-row';
-    row.innerHTML =
-      '<span class="model-key">' + a.name + '</span>' +
-      '<span class="model-val" style="font-family:var(--mono);font-size:10px;">' +
-        (a.model_override
-          ? '<span style="color:var(--yellow)">' + a.model_override + '</span>'
-          : '<span style="color:var(--text-dim)">' + defaultModel + '</span>') +
-      '</span>';
-    agEl.appendChild(row);
-  });
-}
-
-// ═══════════════════════════════════════════════════════════════
-// REFRESH COORDINATORS
-// ═══════════════════════════════════════════════════════════════
-function refreshAutomation() {
-  loadWorkerStatus();
-  loadSchedules();
-}
-function refreshOrchestration() {
-  loadOrchestrationDecisions();
-  loadOrchestrationStatus();
-  loadApprovals();
-  loadModelStatus();
-}
-
-// ═══════════════════════════════════════════════════════════════
-// POLLING
-// ═══════════════════════════════════════════════════════════════
-function startPolling() {
-  // Worker status every 5s
-  _pollTimers.push(setInterval(function() {
-    if (document.getElementById('view-automation')?.classList.contains('active')) loadWorkerStatus();
-    // Always update approval count for topbar awareness
-    const p = RockoCore.getPendingApproval();
-    const badge = document.getElementById('approvalsCount');
-    if (badge) badge.textContent = p ? '1' : '0';
-  }, 5000));
-
-  // Schedules every 30s
-  _pollTimers.push(setInterval(function() {
-    if (document.getElementById('view-automation')?.classList.contains('active')) loadSchedules();
-  }, 30000));
-
-  // Orchestration every 10s
-  _pollTimers.push(setInterval(function() {
-    if (document.getElementById('view-orchestration')?.classList.contains('active')) {
-      loadOrchestrationStatus();
-      loadApprovals();
-    }
-  }, 10000));
-}
-
-// Wire approvalRequired event to also refresh orchestration panel
-RockoCore.onRender('approvalRequired', function(d) {
-  showApprovalGate(d);
-  loadApprovals();
-});
-
-
-// ─────────────────────────────────────────────────────────
-// BOOT
-// ─────────────────────────────────────────────────────────
-
-
-// ═══════════════════════════════════════════════════════════════
-// UI POLISH — loading states, toasts, confirmations
-// No monkey-patching. Functions defined once, cleanly.
-// ═══════════════════════════════════════════════════════════════
-
-// Loading overlay
-function showLoading(label) {
-  const lov = document.getElementById('loadingOverlay');
-  if (!lov) return;
-  const lbl = document.getElementById('loadingLabel');
-  if (lbl) lbl.textContent = label || 'Loading...';
-  lov.classList.add('show');
-}
-function hideLoading() {
-  const lov2 = document.getElementById('loadingOverlay'); if (lov2) lov2.classList.remove('show');
-}
-
-// Toast notifications
-function toast(msg, type, duration) {
-  type = type || 'info'; duration = duration || 3500;
-  const c = document.getElementById('toastContainer');
-  if (!c) return;
-  const t = document.createElement('div');
-  t.className = 'toast ' + type;
-  t.textContent = msg;
-  c.appendChild(t);
-  requestAnimationFrame(function(){ requestAnimationFrame(function(){ t.classList.add('show'); }); });
-  setTimeout(function() { t.classList.remove('show'); setTimeout(function(){ t.remove(); }, 300); }, duration);
-}
-function toastOk(msg)   { toast(msg, 'success'); }
-function toastErr(msg)  { toast(msg, 'error', 5000); }
-function toastWarn(msg) { toast(msg, 'warn'); }
-
-// ── setTab — wire automation + orchestration refresh on tab switch ─────────
-// Override without recursion: store original reference BEFORE redefining via assignment
-var _setTabBase = setTab;
-setTab = function(view, btn) {
-  _setTabBase(view, btn);
-  if (view === 'automation')    refreshAutomation();
-  if (view === 'orchestration') refreshOrchestration();
-};
-
-// ── Worker controls with loading + toast ─────────────────────────────────────
-// Replaces the workerCtrl defined in automation block above
-workerCtrl = async function(action) {
-  showLoading(action.charAt(0).toUpperCase() + action.slice(1) + 'ing worker...');
-  const res = await bridgePost('/tasks/worker/' + action);
-  hideLoading();
-  if (res) { toastOk('Worker ' + action + ': ' + (res.status || 'ok')); loadWorkerStatus(); }
-  else      toastErr('Worker control failed — is bridge running?');
-};
-
-// ── schedRunNow with feedback ────────────────────────────────────────────────
-schedRunNow = async function(id) {
-  showLoading('Firing schedule...');
-  const r = await bridgePost('/schedules/' + id + '/run-now');
-  hideLoading();
-  if (r) { toastOk('Schedule fired'); setTimeout(loadSchedules, 1500); }
-  else    toastErr('Failed to fire schedule');
-};
-
-// ── schedDelete with confirmation + feedback ─────────────────────────────────
-schedDelete = async function(id, name) {
-  if (!confirm('Delete schedule "' + name + '"? This cannot be undone.')) return;
-  showLoading('Deleting...');
-  const ok = await bridgeDelete('/schedules/' + id);
-  hideLoading();
-  if (ok) { toastOk('Schedule deleted: ' + name); loadSchedules(); }
-  else     toastErr('Delete failed');
-};
-
-// ── submitCreateSchedule with loading + toast ────────────────────────────────
-submitCreateSchedule = async function() {
-  const name   = document.getElementById('schedName').value.trim();
-  const type   = document.getElementById('schedType').value;
-  const target = document.getElementById('schedTarget').value.trim();
-  const mode   = document.getElementById('schedMode').value;
-  if (!name)   { toastErr('Schedule name is required'); return; }
-  if (!target) { toastErr('Target ID is required'); return; }
-  let inputData = {};
-  const inp = document.getElementById('schedInput').value.trim();
-  if (inp) { try { inputData = JSON.parse(inp); } catch(e) { toastErr('Invalid JSON: ' + e.message); return; } }
-  const body = { name, type, target_id: target, schedule_type: mode, input: inputData, enabled: true };
-  if (mode === 'interval') body.interval_seconds = parseInt(document.getElementById('schedInterval').value) || 1800;
-  if (mode === 'cron')     body.cron = document.getElementById('schedCron').value.trim();
-  showLoading('Creating schedule...');
-  const r = await bridgePost('/schedules', body);
-  hideLoading();
-  if (r) {
-    toastOk('Schedule created: ' + name);
-    closeModal('createScheduleModal');
-    document.getElementById('schedName').value = '';
-    document.getElementById('schedTarget').value = '';
-    loadSchedules();
-  } else toastErr('Failed to create schedule — check bridge is running');
-};
-
-// ── submitOrchestrate with loading + toast ───────────────────────────────────
-submitOrchestrate = async function() {
-  let ctx = {};
-  const raw = document.getElementById('orchestrateCtx').value.trim();
-  if (raw) { try { ctx = JSON.parse(raw); } catch(e) { toastErr('Invalid JSON: ' + e.message); return; } }
-  else { const runCtx = RockoCore.getRunContext(); if (runCtx) ctx = runCtx; }
-  showLoading('CEO evaluating pipeline...');
-  const r = await bridgePost('/orchestrate', {pipeline_context: ctx});
-  hideLoading();
-  if (r) {
-    toastOk('CEO: ' + (r.decision || '?').toUpperCase() + ' — ' + (r.reason || '').slice(0, 60));
-    closeModal('orchestrateModal');
-    loadOrchestrationDecisions();
-    loadOrchestrationStatus();
-  } else toastErr('Orchestration failed — check CEO agent + bridge');
-};
-
-// ── renderSchedules — highlight failed schedules ─────────────────────────────
-// Patch renderSchedules to add error-state class post-render
-var _renderSchedulesBase = renderSchedules;
-renderSchedules = function() {
-  _renderSchedulesBase();
-  requestAnimationFrame(function() {
-    var items = document.querySelectorAll('.sched-item');
-    items.forEach(function(el, i) {
-      if (_schedules[i] && _schedules[i].last_status === 'error') {
-        el.classList.add('error-state');
-      }
-    });
-  });
-};
-
-// ── Highlight running tasks ───────────────────────────────────────────────────
-var _refreshTasksBase = refreshTasks;
-refreshTasks = function() {
-  _refreshTasksBase();
-  requestAnimationFrame(function() {
+  // Also update agent model list
+  var agEl = document.getElementById('agentModelList');
+  if (agEl) {
     var proj = RockoCore.getActiveProject();
-    var running = RockoCore.getTasks(proj, 'running');
-    running.forEach(function(t) {
-      var el = document.querySelector('[data-id="' + t.id + '"]');
-      if (el) el.classList.add('running');
+    var agents = RockoCore.getAgents(proj);
+    var manifest = RockoCore.getProject(proj);
+    var defaultModel = manifest && manifest.model ? (manifest.model.default_model || '--') : '--';
+    agEl.innerHTML = '';
+    if (!agents.length) { agEl.innerHTML = '<div class="empty-state">No agents loaded.</div>'; return; }
+    agents.forEach(function(a) {
+      var row = document.createElement('div');
+      row.className = 'model-row';
+      var override = a.model_override;
+      var provLabel = '';
+      if (override) {
+        Object.keys(d).forEach(function(pid) {
+          var prov = d[pid];
+          if (prov.available_models && prov.available_models.includes(override)) {
+            provLabel = '<span style="color:' + (pid==='nvidia'?'#76b900':'var(--accent)') + ';font-size:9px;margin-left:4px;">' + pid.toUpperCase() + '</span>';
+          }
+        });
+      }
+      row.innerHTML =
+        '<span class="model-key">' + a.name + '</span>' +
+        '<span class="model-val" style="font-family:var(--mono);font-size:10px;">' +
+          (override
+            ? '<span style="color:var(--yellow)">' + override + '</span>' + provLabel
+            : '<span style="color:var(--text-dim)">' + defaultModel + '</span>') +
+        '</span>';
+      agEl.appendChild(row);
     });
-  });
-};
+  }
+}
 
-// ── System test ───────────────────────────────────────────────────────────────
 async function runSystemTest() {
   showLoading('Running system verification...');
   try {
@@ -4424,7 +4284,60 @@ async function fullBoot() {
   var authed = await bootAuth();
   if (authed) { bootCompanyLayer(); }
   // 3. Start polling + init UI
-  startPolling();
+  
+// ── Provider test ─────────────────────────────────────────────
+async function testProvider(providerId) {
+  showLoading('Testing ' + providerId + ' connection...');
+  var r = await bridgePost('/models/providers/' + providerId + '/test', {});
+  hideLoading();
+  if (r && r.ok) {
+    toastOk(providerId.toUpperCase() + ' connection successful');
+  } else {
+    toastErr((providerId.toUpperCase() + ': ') + (r && r.error ? r.error.slice(0,100) : 'Connection failed'));
+  }
+}
+
+// ── NVIDIA model helper — populate model selector ─────────────
+var NVIDIA_MODELS = [
+  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+  'meta/llama-3.1-70b-instruct',
+  'meta/llama-3.3-70b-instruct',
+  'deepseek-ai/deepseek-r1',
+  'mistralai/mixtral-8x7b-instruct-v0.1',
+  'google/gemma-3-27b-it',
+  'microsoft/phi-4',
+  'qwen/qwen2.5-72b-instruct',
+];
+
+function populateModelSelector(selectId, currentValue) {
+  var sel = document.getElementById(selectId);
+  if (!sel) return;
+  bridgeGet('/models/providers').then(function(d) {
+    if (!d) return;
+    sel.innerHTML = '<option value="">— Use project default —</option>';
+    Object.entries(d).forEach(function(pair) {
+      var provId = pair[0], cfg = pair[1];
+      var models = cfg.available_models || [];
+      if (provId === 'anthropic') {
+        ['claude-opus-4-20250514','claude-sonnet-4-20250514','claude-haiku-4-5-20251001'].forEach(function(m) {
+          var opt = document.createElement('option');
+          opt.value = m; opt.textContent = 'Anthropic: ' + m;
+          if (m === currentValue) opt.selected = true;
+          sel.appendChild(opt);
+        });
+      } else if (models.length) {
+        models.forEach(function(m) {
+          var opt = document.createElement('option');
+          opt.value = m; opt.textContent = (cfg.display_name || provId) + ': ' + m;
+          if (m === currentValue) opt.selected = true;
+          sel.appendChild(opt);
+        });
+      }
+    });
+  });
+}
+
+startPolling();
   init();
   setTimeout(patchRockoCorePersistence, 500);
 }

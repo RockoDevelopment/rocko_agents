@@ -149,6 +149,13 @@ def run_agent_model(agent_def: Dict, system_prompt: str, messages: list,
         return _err(f"API key missing — set {env_var} in .env", model, prov_key, 0)
 
     # Primary call
+    # nvidia uses openai_compatible format with their own base URL
+    # Ensure NVIDIA base URL is set correctly if not in config
+    if prov_type == "nvidia" or prov_key == "nvidia":
+        prov_type = "openai_compatible"
+        if not api_base or "anthropic" in api_base:
+            api_base = "https://integrate.api.nvidia.com/v1"
+
     if prov_type == "anthropic":
         result = _call_anthropic(model, api_key, api_base, system_prompt, messages, max_tokens)
     else:
@@ -176,19 +183,94 @@ def run_agent_model(agent_def: Dict, system_prompt: str, messages: list,
 
     return result
 
+# Built-in provider registry — shown even if not in project.json
+BUILTIN_PROVIDERS = {
+    "anthropic": {
+        "type": "anthropic",
+        "display_name": "Anthropic",
+        "api_base": "https://api.anthropic.com/v1",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "key_required": True,
+        "docs_url": "https://console.anthropic.com/",
+    },
+    "openai": {
+        "type": "openai_compatible",
+        "display_name": "OpenAI",
+        "api_base": "https://api.openai.com/v1",
+        "api_key_env": "OPENAI_API_KEY",
+        "key_required": True,
+        "docs_url": "https://platform.openai.com/",
+    },
+    "nvidia": {
+        "type": "openai_compatible",
+        "display_name": "NVIDIA",
+        "api_base": "https://integrate.api.nvidia.com/v1",
+        "api_key_env": "NVIDIA_API_KEY",
+        "key_required": True,
+        "user_owned": True,  # user brings their own key — RockoAgents provides no NVIDIA access
+        "docs_url": "https://build.nvidia.com/",
+        "available_models": [
+            "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+            "meta/llama-3.1-70b-instruct",
+            "meta/llama-3.3-70b-instruct",
+            "deepseek-ai/deepseek-r1",
+            "mistralai/mixtral-8x7b-instruct-v0.1",
+            "google/gemma-3-27b-it",
+            "microsoft/phi-4",
+            "qwen/qwen2.5-72b-instruct",
+        ],
+        "note": "Users must supply their own NVIDIA_API_KEY. RockoAgents does not provide NVIDIA model access.",
+    },
+    "local": {
+        "type": "openai_compatible",
+        "display_name": "Local (Ollama)",
+        "api_base": "http://localhost:11434/v1",
+        "api_key_env": None,
+        "key_required": False,
+        "docs_url": "https://ollama.ai/",
+    },
+}
+
 def get_provider_status(project_root: str = "") -> Dict:
     """Returns provider health — whether API keys are present (not the keys themselves)."""
-    env      = load_env(project_root) if project_root else _env_vars
+    env       = load_env(project_root) if project_root else _env_vars
     providers = _project.get("model", {}).get("providers", {})
-    status   = {}
+    status    = {}
+
+    # Start with built-in providers so they always appear in UI
+    for prov_key, builtin in BUILTIN_PROVIDERS.items():
+        env_var     = builtin.get("api_key_env")
+        key_present = bool(env.get(env_var)) if env_var else True
+        entry = {
+            "type":         builtin["type"],
+            "display_name": builtin["display_name"],
+            "key_required": builtin["key_required"],
+            "key_present":  key_present,
+            "env_var":      env_var,
+            "api_base":     builtin["api_base"],
+            "user_owned":   builtin.get("user_owned", False),
+            "note":         builtin.get("note", ""),
+        }
+        if "available_models" in builtin:
+            entry["available_models"] = builtin["available_models"]
+        status[prov_key] = entry
+
+    # Overlay with project-configured providers (may override or add custom)
     for prov_key, prov_cfg in providers.items():
         prov_type = prov_cfg.get("type", prov_key)
         env_var   = prov_cfg.get("api_key_env") or prov_cfg.get("env_var")
-        if prov_type == "local":
-            status[prov_key] = {"type": "local", "key_required": False, "key_present": True,
-                                "base_url": prov_cfg.get("base_url", "")}
-        else:
-            key_present = bool(env.get(env_var)) if env_var else False
-            status[prov_key] = {"type": prov_type, "key_required": True,
-                                "key_present": key_present, "env_var": env_var}
+        key_present = (True if prov_type == "local"
+                       else bool(env.get(env_var)) if env_var else False)
+        status[prov_key] = {
+            **status.get(prov_key, {}),
+            "type":         prov_type,
+            "key_required": prov_type != "local",
+            "key_present":  key_present,
+            "env_var":      env_var,
+            "api_base":     prov_cfg.get("api_base") or prov_cfg.get("base_url", ""),
+            "configured_in_project": True,
+        }
+        if prov_cfg.get("available_models"):
+            status[prov_key]["available_models"] = prov_cfg["available_models"]
+
     return status
