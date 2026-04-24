@@ -1,12 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-rocko.spec — PyInstaller build specification for RockoAgents
+rocko.spec -- PyInstaller build specification
 
-Build:   python build.py
-Output:  dist/rocko.exe (Windows)  |  dist/rocko (Mac/Linux)
-Size:    ~25MB single file, no install required
+Key fix: bridge/ is a proper Python package (has __init__.py).
+pathex includes only ROOT -- bridge is imported as bridge.xxx not as bare module names.
+hiddenimports use fully qualified package paths.
 
-Tested and confirmed working.
+Build:  python build.py
+Output: dist/rocko.exe (Windows) | dist/rocko (Mac/Linux)
 """
 
 from pathlib import Path
@@ -14,11 +15,23 @@ ROOT = Path(SPECPATH)
 
 a = Analysis(
     [str(ROOT / 'main.py')],
-    pathex=[str(ROOT), str(ROOT / 'bridge')],
+    pathex=[str(ROOT)],          # ONLY root -- bridge/ resolved via package, not pathex
     binaries=[],
-    datas=[],
+    datas=[
+        # Include bridge package directory as package data
+        (str(ROOT / 'bridge'), 'bridge'),
+    ],
     hiddenimports=[
-        # ── FastAPI + Starlette ──────────────────────────────────────────────
+        # Bridge as proper package -- fully qualified
+        'bridge',
+        'bridge.bridge',
+        'bridge.model_manager',
+        'bridge.task_worker',
+        'bridge.scheduler',
+        'bridge.orchestrator',
+        'bridge.runtime_manager',
+
+        # FastAPI + Starlette
         'fastapi',
         'fastapi.middleware',
         'fastapi.middleware.cors',
@@ -33,13 +46,12 @@ a = Analysis(
         'starlette.requests',
         'starlette.staticfiles',
         'starlette.background',
-        'starlette.concurrency',
         'starlette.datastructures',
         'starlette.exceptions',
         'starlette.status',
         'starlette.types',
 
-        # ── Uvicorn ──────────────────────────────────────────────────────────
+        # Uvicorn
         'uvicorn',
         'uvicorn.main',
         'uvicorn.config',
@@ -60,7 +72,7 @@ a = Analysis(
         'uvicorn.middleware',
         'uvicorn.middleware.proxy_headers',
 
-        # ── Pydantic ─────────────────────────────────────────────────────────
+        # Pydantic
         'pydantic',
         'pydantic.v1',
         'pydantic_core',
@@ -69,7 +81,7 @@ a = Analysis(
         'pydantic.fields',
         'pydantic.functional_validators',
 
-        # ── APScheduler ──────────────────────────────────────────────────────
+        # APScheduler
         'apscheduler',
         'apscheduler.schedulers',
         'apscheduler.schedulers.base',
@@ -89,9 +101,8 @@ a = Analysis(
         'apscheduler.job',
         'apscheduler.util',
         'tzlocal',
-        'pytz',
 
-        # ── Async / HTTP ─────────────────────────────────────────────────────
+        # Async / HTTP
         'anyio',
         'anyio._backends',
         'anyio._backends._asyncio',
@@ -106,18 +117,9 @@ a = Analysis(
         'aiofiles.threadpool.binary',
         'aiofiles.threadpool.text',
 
-        # ── Bridge modules ───────────────────────────────────────────────────
-        'bridge',
-        'model_manager',
-        'task_worker',
-        'scheduler',
-        'orchestrator',
-        'runtime_manager',
-
-        # ── Standard library extras ──────────────────────────────────────────
+        # Standard library
         'email.mime.text',
         'email.mime.multipart',
-        'email.mime.nonmultipart',
         'importlib.metadata',
         'importlib.resources',
         'multiprocessing',
@@ -130,6 +132,8 @@ a = Analysis(
         'urllib.parse',
         'http.client',
         'http.server',
+        'hashlib',
+        'hmac',
         'json',
         'pathlib',
         'threading',
@@ -143,13 +147,12 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # Strip unused heavy packages to keep size down
         'tkinter', '_tkinter', 'tcl',
         'matplotlib', 'numpy', 'pandas', 'scipy',
         'PIL', 'cv2', 'sklearn', 'tensorflow', 'torch',
         'wx', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6',
         'jupyter', 'notebook', 'IPython',
-        'test', 'tests', 'unittest',
+        'test', 'tests',
     ],
     noarchive=False,
     optimize=0,
@@ -170,11 +173,11 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,       # Keep terminal visible — users see the startup banner + live logs
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    onefile=True,       # Single file — no folder, just one exe
+    onefile=True,
 )

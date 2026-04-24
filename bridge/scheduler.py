@@ -48,7 +48,7 @@ class SchedulerManager:
     def _log(self, msg: str):
         self._log_fn(f"[SCHED  ] {msg}")
 
-    # ── Persistence ───────────────────────────────────────────────────────────
+    # -- Persistence -----------------------------------------------------------
     def load(self):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         if self.schedules_file.exists():
@@ -65,7 +65,7 @@ class SchedulerManager:
         except Exception as e:
             self._log(f"Save error: {e}")
 
-    # ── Validation ────────────────────────────────────────────────────────────
+    # -- Validation ------------------------------------------------------------
     def _validate(self, defn: Dict) -> Optional[str]:
         if not defn.get("name"):             return "name is required"
         if defn.get("type") not in VALID_TYPES: return f"type must be one of {VALID_TYPES}"
@@ -78,7 +78,7 @@ class SchedulerManager:
             return "cron expression required for cron schedule"
         return None
 
-    # ── APScheduler trigger ───────────────────────────────────────────────────
+    # -- APScheduler trigger ---------------------------------------------------
     def _make_trigger(self, defn: Dict):
         if not APSCHEDULER_AVAILABLE: return None
         if defn["schedule_type"] == "interval":
@@ -112,7 +112,7 @@ class SchedulerManager:
                     defn["next_run_at"] = next_run.isoformat() if next_run else None
             self._save()
 
-    # ── CRUD ──────────────────────────────────────────────────────────────────
+    # -- CRUD ------------------------------------------------------------------
     def add_schedule(self, defn: Dict) -> Dict:
         err = self._validate(defn)
         if err: raise ValueError(err)
@@ -210,10 +210,10 @@ class SchedulerManager:
     def get_schedule(self, schedule_id: str) -> Optional[Dict]:
         return self._schedules.get(schedule_id)
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
+    # -- Lifecycle -------------------------------------------------------------
     def start(self):
         if not APSCHEDULER_AVAILABLE:
-            self._log("APScheduler not installed — pip install apscheduler")
+            self._log("APScheduler not installed - pip install apscheduler")
             return
         self._scheduler.start()
         self._started = True

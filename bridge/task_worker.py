@@ -1,3 +1,5 @@
+TASK_WORKER_BUILD_ID = "task_worker_package_import_fix_2026_04_24"
+
 """
 RockoAgents Task Worker
 Background worker that continuously processes the task queue.
@@ -8,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# -- Constants -----------------------------------------------------------------
 STATUS_QUEUED    = "queued"
 STATUS_RUNNING   = "running"
 STATUS_COMPLETE  = "complete"
@@ -44,7 +46,7 @@ class TaskWorker:
 
         self.load()
 
-    # ── Init ──────────────────────────────────────────────────────────────────
+    # -- Init ------------------------------------------------------------------
     def init(self, project: Dict, log_fn: Callable = print):
         self._project = project
         self._log_fn  = log_fn
@@ -62,7 +64,7 @@ class TaskWorker:
         except TypeError:
             self._log_fn("info", f"[WORKER ] {msg}")
 
-    # ── Persistence ───────────────────────────────────────────────────────────
+    # -- Persistence -----------------------------------------------------------
     def load(self):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         if self.tasks_file.exists():
@@ -92,7 +94,7 @@ class TaskWorker:
         except Exception as e:
             self._log(f"Run save error: {e}")
 
-    # ── Task CRUD ─────────────────────────────────────────────────────────────
+    # -- Task CRUD -------------------------------------------------------------
     def create_task(self, title: str, assigned_to: str, task_type: str = "agent",
                     instructions: str = "", input_data: Dict = {},
                     parent_task_id: str = None, max_retries: int = None,
@@ -122,7 +124,7 @@ class TaskWorker:
             if parent_task_id and parent_task_id in self._tasks:
                 self._tasks[parent_task_id]["subtasks"].append(task_id)
             self._save()
-        self._log(f"Task created: {title} → {assigned_to}")
+        self._log(f"Task created: {title} -> {assigned_to}")
         return task
 
     def get_task(self, task_id: str) -> Optional[Dict]:
@@ -161,7 +163,7 @@ class TaskWorker:
         self._log(f"Task retry queued: {t['title']}")
         return True
 
-    # ── Execution ─────────────────────────────────────────────────────────────
+    # -- Execution -------------------------------------------------------------
     def _run_task(self, task: Dict):
         task_id = task["id"]
         self._current_task_id = task_id
@@ -221,7 +223,7 @@ class TaskWorker:
 
         except Exception as e:
             dur = round((time.time() - t0) * 1000)
-            self._log(f"Task failed: {task['title']} — {e}")
+            self._log(f"Task failed: {task['title']} - {e}")
             task["error"] = str(e)
             if task["attempts"] <= task["max_retries"]:
                 task["status"] = STATUS_QUEUED
@@ -249,7 +251,7 @@ class TaskWorker:
         # Executors can only be called by ceo/engine roles
         return True  # agent tasks always allowed; executor tasks checked in _run_task
 
-    # ── Worker loop ───────────────────────────────────────────────────────────
+    # -- Worker loop -----------------------------------------------------------
     def _worker_loop(self):
         self._log("Worker started")
         while self._running:
@@ -287,10 +289,11 @@ class TaskWorker:
         threading.Thread(target=self._run_task, args=(task,), daemon=True).start()
         return True
 
-    # ── Status ────────────────────────────────────────────────────────────────
+    # -- Status ----------------------------------------------------------------
     def status(self) -> Dict:
         tasks = list(self._tasks.values())
         return {
+            "build_id":         TASK_WORKER_BUILD_ID,
             "running":          self._running,
             "paused":           self._paused,
             "current_task_id":  self._current_task_id,

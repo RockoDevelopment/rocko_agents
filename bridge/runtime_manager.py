@@ -3,16 +3,16 @@ RockoAgents Runtime Manager
 Orchestrates external agent systems as first-class workers.
 
 Supported runtime types:
-  cli        — subprocess CLI tool (OpenClaw, Claude Code, any local agent CLI)
-  http       — HTTP API call (local agent server, hosted service)
-  webhook    — event dispatch with optional async callback
-  mcp        — future: MCP tool-server protocol
-  python     — existing Python script executor (unified here)
+  cli        - subprocess CLI tool (OpenClaw, Claude Code, any local agent CLI)
+  http       - HTTP API call (local agent server, hosted service)
+  webhook    - event dispatch with optional async callback
+  mcp        - future: MCP tool-server protocol
+  python     - existing Python script executor (unified here)
 
 Security model:
-  - Commands come from project.json only — never from agent text
+  - Commands come from project.json only - never from agent text
   - Args use {{variable}} substitution from approved context keys only
-  - Secrets loaded from .env — never logged, never sent to browser
+  - Secrets loaded from .env - never logged, never sent to browser
   - allowed_agents enforced per runtime
   - risk_level determines whether human approval is required
   - Timeout and working-dir boundaries enforced on every call
@@ -179,7 +179,7 @@ class RuntimeManager:
                            error=f"Exit {proc.returncode}: {err[:200]}" if not ok else None)
         except FileNotFoundError:
             return _result(False, runtime_id, "cli", t0,
-                           error=f"Command not found: '{command}' — is it installed and on PATH?")
+                           error=f"Command not found: '{command}' - is it installed and on PATH?")
         except Exception as e:
             return _result(False, runtime_id, "cli", t0, error=str(e))
 
@@ -289,7 +289,7 @@ class RuntimeManager:
             result = _result(False, runtime_id, rtype, time.time(),
                              error=f"Unknown runtime type: '{rtype}'")
         self._record(runtime_id, result)
-        self._log(f"{"✓" if result["ok"] else "✕"} Runtime '{runtime_id}': {result['duration_ms']}ms")
+        self._log(f"{"OK" if result["ok"] else "FAIL"} Runtime '{runtime_id}': {result['duration_ms']}ms")
         return result
 
     def _record(self, runtime_id: str, result: Dict):

@@ -19,7 +19,7 @@ try:
 except ImportError:
     print("\nERROR: pip install -r requirements.txt\n"); sys.exit(1)
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# -- Paths ---------------------------------------------------------------------
 if getattr(sys, 'frozen', False):
     # Running as PyInstaller compiled executable
     BRIDGE_DIR = Path(sys.executable).parent.resolve()
@@ -30,9 +30,10 @@ else:
     ROCKO_ROOT = BRIDGE_DIR.parent.resolve()
     sys.path.insert(0, str(BRIDGE_DIR))
 
-BRIDGE_START = datetime.now().isoformat()
+BRIDGE_START    = datetime.now().isoformat()
+BRIDGE_BUILD_ID = "bridge_package_import_fix_2026_04_24"
 
-# ── Core state ────────────────────────────────────────────────────────────────
+# -- Core state ----------------------------------------------------------------
 PROJECT:        Dict = {}
 PROJECT_ROOT:   str  = ""
 DATA_DIR:       Path = ROCKO_ROOT / "data" / "rockoagents"
@@ -51,7 +52,7 @@ PIPELINE_STATE: Dict = {}
 LOG_BUFFER:     List = []
 VERBOSE:        bool = False
 
-# ── Subsystems (initialised after project loads) ──────────────────────────────
+# -- Subsystems (initialised after project loads) ------------------------------
 _model_mgr    = None
 _task_worker  = None
 _scheduler    = None
@@ -59,7 +60,7 @@ _orchestrator = None
 _runtime_mgr  = None
 _runtime_mgr  = None
 
-# ── App ───────────────────────────────────────────────────────────────────────
+# -- App -----------------------------------------------------------------------
 app = FastAPI(title="RockoAgents Bridge", version="5.0.0", docs_url="/docs")
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -71,7 +72,7 @@ def _log(level: str, msg: str):
     if VERBOSE or level == "error":
         print(f"[{level.upper():7}] {msg}")
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# -- Models --------------------------------------------------------------------
 class RunRequest(BaseModel):
     context:       Dict[str, Any] = {}
     input:         Dict[str, Any] = {}
@@ -123,7 +124,7 @@ class RuntimeRunRequest(BaseModel):
     agent_id:  Optional[str] = None
     dry_run:   bool = False
 
-# ── Project loading ───────────────────────────────────────────────────────────
+# -- Project loading -----------------------------------------------------------
 def load_project(path: str) -> bool:
     global PROJECT, PROJECT_ROOT, DATA_DIR
     try:
@@ -202,16 +203,16 @@ def validate_project() -> Dict:
     checks["env"] = env_checks
     # Model provider check
     if _model_mgr:
-        import model_manager as mm
+        from bridge import model_manager as mm
         prov_status = mm.get_provider_status(PROJECT_ROOT)
         checks["providers"] = prov_status
         # Warn if NVIDIA configured but key missing
         for prov_key, prov_info in prov_status.items():
             if prov_info.get("key_required") and prov_info.get("configured_in_project") and not prov_info.get("key_present"):
-                warns.append(f"Provider '{prov_key}': key missing — set {prov_info.get('env_var','?')} in .env")
+                warns.append(f"Provider '{prov_key}': key missing - set {prov_info.get('env_var','?')} in .env")
     return {"valid": len(errors) == 0, "errors": errors, "warns": warns, "checks": checks}
 
-# ── Executor runner ───────────────────────────────────────────────────────────
+# -- Executor runner -----------------------------------------------------------
 def run_executor_sync(eid: str, context: Dict, env_overrides: Dict = {}, dry_run: bool = False) -> Dict:
     ex = get_executor(eid)
     if not ex:
@@ -281,10 +282,10 @@ def run_executor_sync(eid: str, context: Dict, env_overrides: Dict = {}, dry_run
     _log("info" if result["ok"] else "error", f"Executor '{eid}': ok={result['ok']} exit={result['exit_code']} {result['duration_ms']}ms")
     return result
 
-# ── Subsystem init ────────────────────────────────────────────────────────────
+# -- Subsystem init ------------------------------------------------------------
 def _init_subsystems():
     global _model_mgr, _task_worker, _scheduler, _orchestrator
-    import model_manager as mm
+    from bridge import model_manager as mm
     env = build_env()
     mm.init(PROJECT, env)
     _model_mgr = mm
@@ -292,7 +293,7 @@ def _init_subsystems():
     def _agent_call(agent_def, system, messages):
         return mm.run_agent_model(agent_def, system, messages, PROJECT_ROOT)
 
-    from task_worker import TaskWorker
+    from bridge.task_worker import TaskWorker
     def _runtime_call(runtime_id, context):
         if _runtime_mgr:
             return _runtime_mgr.run(runtime_id, context)
@@ -312,7 +313,7 @@ def _init_subsystems():
         target = schedule_def.get("target_id")
         inp = schedule_def.get("input", {})
         if stype == "pipeline":
-            return {"ok": True, "note": "pipeline scheduled run — use /pipeline endpoint"}
+            return {"ok": True, "note": "pipeline scheduled run - use /pipeline endpoint"}
         elif stype == "executor":
             return run_executor_sync(target, inp)
         elif stype == "agent":
@@ -324,17 +325,17 @@ def _init_subsystems():
             if task: _task_worker.run_now(target)
         return {"ok": True}
 
-    from scheduler import SchedulerManager
+    from bridge.scheduler import SchedulerManager
     _scheduler = SchedulerManager(DATA_DIR, _schedule_fire)
     _scheduler.init(lambda msg: _log("info", msg))
     _scheduler.start()
     _log("info", f"Schedule recovery: {len(_scheduler.list_schedules())} schedule(s) reloaded from disk")
 
-    from orchestrator import CEOOrchestrator
+    from bridge.orchestrator import CEOOrchestrator
     _orchestrator = CEOOrchestrator(_agent_call, _task_worker)
     _orchestrator.init(PROJECT, lambda msg: _log("info", msg))
 
-    from runtime_manager import RuntimeManager
+    from bridge.runtime_manager import RuntimeManager
     _runtime_mgr = RuntimeManager()
     _runtime_mgr.init(PROJECT, lambda msg: _log("info", msg))
 
@@ -345,7 +346,7 @@ def _init_subsystems():
     _auto_migrate_paperteam()
     _log("info", "All subsystems initialised")
 
-# ── Static + UI ───────────────────────────────────────────────────────────────
+# -- Static + UI ---------------------------------------------------------------
 @app.get("/", include_in_schema=False)
 def serve_ui():
     p = ROCKO_ROOT / "index.html"
@@ -380,7 +381,7 @@ try:
     app.mount("/assets", StaticFiles(directory=str(ROCKO_ROOT)), name="assets")
 except Exception: pass
 
-# ── Core routes ───────────────────────────────────────────────────────────────
+# -- Core routes ---------------------------------------------------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "bridge_version": "5.0.0", "project_loaded": bool(PROJECT),
@@ -390,7 +391,7 @@ def health():
             "agents": [a["id"] for a in PROJECT.get("agents", [])],
             "scheduler_available": _scheduler.is_available() if _scheduler else False,
             "worker_running": _task_worker._running if _task_worker else False,
-            "timestamp": datetime.now().isoformat()}
+            "timestamp": datetime.now().isoformat(), "build_id": BRIDGE_BUILD_ID}
 
 @app.get("/project")
 def get_project():
@@ -522,7 +523,7 @@ def reset():
     _log("info", "State reset")
     return {"status": "reset", "timestamp": datetime.now().isoformat()}
 
-# ── Task routes ───────────────────────────────────────────────────────────────
+# -- Task routes ---------------------------------------------------------------
 @app.get("/tasks")
 def list_tasks(status: Optional[str] = None):
     if not _task_worker: raise HTTPException(503, "Task worker not initialised")
@@ -586,7 +587,7 @@ def retry_task(task_id: str):
     if not _task_worker.retry_task(task_id): raise HTTPException(400, "Task cannot be retried")
     return {"status": "queued", "task_id": task_id}
 
-# ── Scheduler routes ──────────────────────────────────────────────────────────
+# -- Scheduler routes ----------------------------------------------------------
 @app.get("/schedules")
 def list_schedules():
     if not _scheduler: raise HTTPException(503, "Scheduler not initialised")
@@ -637,7 +638,7 @@ def run_schedule_now(schedule_id: str):
     if not _scheduler.run_now(schedule_id): raise HTTPException(404, "Schedule not found")
     return {"status": "fired", "schedule_id": schedule_id}
 
-# ── Orchestration routes ──────────────────────────────────────────────────────
+# -- Orchestration routes ------------------------------------------------------
 @app.post("/orchestrate")
 def orchestrate(req: OrchestrateRequest):
     if not _orchestrator: raise HTTPException(503, "Orchestrator not initialised")
@@ -657,7 +658,7 @@ def orchestrate_decisions():
     if not _orchestrator: raise HTTPException(503, "Orchestrator not initialised")
     return {"decisions": _orchestrator.get_decisions()}
 
-# ── Model routes ──────────────────────────────────────────────────────────────
+# -- Model routes --------------------------------------------------------------
 @app.get("/models/providers")
 def model_providers():
     if not _model_mgr: raise HTTPException(503, "Model manager not initialised")
@@ -665,19 +666,19 @@ def model_providers():
 
 @app.post("/models/providers/{provider_id}/test")
 async def test_provider(provider_id: str):
-    """Test a provider connection — checks key presence and does a minimal API call."""
+    """Test a provider connection - checks key presence and does a minimal API call."""
     if not _model_mgr:
         raise HTTPException(503, "Model manager not initialised")
-    import model_manager as mm
+    from bridge import model_manager as mm
     status = mm.get_provider_status(PROJECT_ROOT)
     prov = status.get(provider_id)
     if not prov:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
     if not prov.get("key_present"):
         return {"ok": False, "provider": provider_id,
-                "error": f"API key missing — set {prov.get('env_var','?')} in .env",
+                "error": f"API key missing - set {prov.get('env_var','?')} in .env",
                 "key_present": False}
-    # Do a minimal test call — list models or do a tiny completion
+    # Do a minimal test call - list models or do a tiny completion
     try:
         env   = mm.load_env(PROJECT_ROOT)
         key   = env.get(prov.get("env_var","")) if prov.get("env_var") else None
@@ -703,7 +704,7 @@ def model_config():
                          for k, v in cfg.get("providers", {}).items()}
     return safe
 
-# ── Runtime routes ────────────────────────────────────────────────────────────
+# -- Runtime routes ------------------------------------------------------------
 @app.get("/runtimes")
 def list_runtimes():
     if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
@@ -734,7 +735,7 @@ def run_runtime(runtime_id: str, req: RuntimeRunRequest):
     return _runtime_mgr.execute(runtime_id, req.context, req.agent_id, req.dry_run)
 
 
-# ── Runtime endpoints ─────────────────────────────────────────────────────────
+# -- Runtime endpoints ---------------------------------------------------------
 @app.get("/runtimes")
 def list_runtimes():
     if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
@@ -779,12 +780,12 @@ def reload_runtimes():
     return {"status": "reloaded", "count": len(_runtime_mgr.get_runtimes())}
 
 
-# ── System Verification ───────────────────────────────────────────────────────
+# -- System Verification -------------------------------------------------------
 @app.get("/system/test")
 async def system_test():
     """
     End-to-end system verification. Tests all five subsystems.
-    Safe to run against live system — uses dry_run and test fixtures.
+    Safe to run against live system - uses dry_run and test fixtures.
     """
     import asyncio, time as _time
     results = {
@@ -797,7 +798,7 @@ async def system_test():
         "timestamp":     datetime.now().isoformat(),
     }
 
-    # ── 1. Task Worker ────────────────────────────────────────────────────────
+    # -- 1. Task Worker --------------------------------------------------------
     if _task_worker:
         try:
             before = _task_worker.status()
@@ -827,19 +828,19 @@ async def system_test():
                     # Check if worker is running
                     st = _task_worker.status()
                     if not st["running"]:
-                        results["task_worker"] = {"status": "warn", "detail": "Worker not running — start from Automation tab"}
+                        results["task_worker"] = {"status": "warn", "detail": "Worker not running - start from Automation tab"}
                     else:
-                        results["task_worker"] = {"status": "warn", "detail": "Task created but not picked up within 3s — worker may be processing another task"}
+                        results["task_worker"] = {"status": "warn", "detail": "Task created but not picked up within 3s - worker may be processing another task"}
             else:
                 results["task_worker"] = {"status": "warn", "detail": "No agents in project to assign test task"}
         except Exception as e:
             results["task_worker"] = {"status": "fail", "detail": str(e)}
 
-    # ── 2. Scheduler ─────────────────────────────────────────────────────────
+    # -- 2. Scheduler ---------------------------------------------------------
     if _scheduler:
         try:
             if not _scheduler.is_available():
-                results["scheduler"] = {"status": "warn", "detail": "APScheduler not installed — run: pip install apscheduler"}
+                results["scheduler"] = {"status": "warn", "detail": "APScheduler not installed - run: pip install apscheduler"}
             else:
                 test_sched = _scheduler.add_schedule({
                     "id": "_system_test_sched",
@@ -862,7 +863,7 @@ async def system_test():
             try: _scheduler.remove_schedule("_system_test_sched")
             except: pass
 
-    # ── 3. Pipeline (dry run) ─────────────────────────────────────────────────
+    # -- 3. Pipeline (dry run) -------------------------------------------------
     if PROJECT:
         try:
             steps = [s for s in PROJECT.get("pipeline", {}).get("execution_order", []) if s["type"] == "executor"]
@@ -878,7 +879,7 @@ async def system_test():
         except Exception as e:
             results["pipeline"] = {"status": "fail", "detail": str(e)}
 
-    # ── 4. CEO Orchestration ──────────────────────────────────────────────────
+    # -- 4. CEO Orchestration --------------------------------------------------
     if _orchestrator:
         try:
             mock_ctx = {
@@ -900,7 +901,7 @@ async def system_test():
         except Exception as e:
             results["orchestration"] = {"status": "fail", "detail": str(e)}
 
-    # ── 5. Approval Gate ──────────────────────────────────────────────────────
+    # -- 5. Approval Gate ------------------------------------------------------
     try:
         # Simulate: check that a pipeline with requires_approval blocks
         pipeline_steps = PROJECT.get("pipeline", {}).get("execution_order", [])
@@ -909,7 +910,7 @@ async def system_test():
         # Verify orchestrator enforces the gate
         if _orchestrator and has_executor:
             # Check that the orchestrator hard rule is in place
-            from orchestrator import CEOOrchestrator
+            from bridge.orchestrator import CEOOrchestrator
             mock_dec = {"decision": "approve", "allow_execution": True,
                         "requires_human_approval": False, "reason": "test"}
             # _validate_decision should force requires_human_approval = True
@@ -928,11 +929,11 @@ async def system_test():
                 "detail": f"{len(gated_steps)} approval gate(s) configured in pipeline"}
         else:
             results["approval_gate"] = {"status": "warn",
-                "detail": "No approval gates configured — add requires_approval: true to a pipeline step"}
+                "detail": "No approval gates configured - add requires_approval: true to a pipeline step"}
     except Exception as e:
         results["approval_gate"] = {"status": "fail", "detail": str(e)}
 
-    # ── 6. Recovery state ─────────────────────────────────────────────────────
+    # -- 6. Recovery state -----------------------------------------------------
     task_count  = len(_task_worker.get_tasks()) if _task_worker else 0
     sched_count = len(_scheduler.list_schedules()) if _scheduler else 0
     run_count   = len(PIPELINE_RUNS)
@@ -945,11 +946,11 @@ async def system_test():
     statuses = [v["status"] for v in results.values() if isinstance(v, dict) and "status" in v]
     overall = "pass" if all(s == "pass" for s in statuses) else "warn" if "fail" not in statuses else "fail"
     results["overall"] = overall
-    _log("info", f"System test complete: {overall.upper()} — {statuses}")
+    _log("info", f"System test complete: {overall.upper()} - {statuses}")
     return results
 
 
-# ── Auth system ───────────────────────────────────────────────────────────────
+# -- Auth system ---------------------------------------------------------------
 import hashlib, hmac
 
 def _users_file() -> Path:
@@ -1080,7 +1081,7 @@ async def auth_logout(request: Request):
 
 @app.get("/auth/export")
 async def auth_export(request: Request):
-    """Export all account data — for backup and device transfer."""
+    """Export all account data - for backup and device transfer."""
     auth_header = request.headers.get("authorization", "")
     token = auth_header[7:] if auth_header.startswith("Bearer ") else None
     user = _get_user_from_session(token) if token else None
@@ -1115,7 +1116,7 @@ async def auth_import(request: Request):
     return {"status": "imported", "count": imported}
 
 
-# ── Company registry ──────────────────────────────────────────────────────────
+# -- Company registry ----------------------------------------------------------
 def _companies_file() -> Path:
     return DATA_DIR / "companies.json"
 
@@ -1225,9 +1226,9 @@ def delete_company(company_id: str):
     _save_companies(companies)
     return {"status": "deleted", "company_id": company_id}
 
-# ── Skills endpoints ──────────────────────────────────────────────────────────
+# -- Skills endpoints ----------------------------------------------------------
 
-# ── Skills system — backed by skills.sh / GitHub ─────────────────────────────
+# -- Skills system - backed by skills.sh / GitHub -----------------------------
 import html as _html
 
 def _fetch_github_file(owner: str, repo: str, path: str) -> Optional[str]:
@@ -1272,7 +1273,7 @@ def _parse_skill_md(content: str, owner: str, repo: str, skill_name: str) -> dic
 
 @app.get("/skills")
 def list_skills():
-    """Load skills from local skills.json (custom skills) — fast, no network."""
+    """Load skills from local skills.json (custom skills) - fast, no network."""
     search_paths = []
     if PROJECT_ROOT:
         search_paths.append(Path(PROJECT_ROOT) / "skills.json")
@@ -1315,14 +1316,14 @@ def browse_skills_sh(limit: int = 30):
                 "skill_name":  skill_name,
                 "repo":        repo,
                 "installs":    installs,
-                "description": f"From {repo} — install with: npx skills add {repo}",
+                "description": f"From {repo} - install with: npx skills add {repo}",
                 "source":      "skills.sh",
             })
             if len(skills) >= limit: break
         _log("info", f"Fetched {len(skills)} skills from skills.sh")
         return {"skills": skills, "source": "skills.sh", "total": len(skills)}
     except Exception as e:
-        _log("warn", f"skills.sh unreachable: {e} — falling back to local")
+        _log("warn", f"skills.sh unreachable: {e} - falling back to local")
         return list_skills()
 
 @app.get("/skills/fetch")
@@ -1375,7 +1376,7 @@ async def assign_skill(request: Request):
         skill_file = skills_dir / f"{owner}__{reponame}__{skill_name}.md"
         with open(skill_file, "w") as f:
             f.write(content)
-    _log("info", f"Skill assigned: {repo}/{skill_name} → agent {agent_id}")
+    _log("info", f"Skill assigned: {repo}/{skill_name} -> agent {agent_id}")
     return {"ok": True, "skill": parsed, "agent_id": agent_id}
 
 @app.post("/skills/{skill_id}/apply/{agent_id}")
@@ -1385,13 +1386,13 @@ async def apply_skill_legacy(skill_id: str, agent_id: str, request: Request):
 
 
 
-# ── Entry ─────────────────────────────────────────────────────────────────────
+# -- Entry ---------------------------------------------------------------------
 def cli_main(argv=None):
-    """Callable entry point — used by PyInstaller exe and rockoagents.cli"""
+    """Callable entry point - used by PyInstaller exe and rockoagents.cli"""
     import sys as _s
     if argv is not None:
         _s.argv = argv
-    # ─────────────────────────────────────────────────────────────────────
+    # ---------------------------------------------------------------------
     parser = argparse.ArgumentParser(description="RockoAgents Bridge v5")
     parser.add_argument("--project",    default=None)
     parser.add_argument("--port",       type=int, default=8787)
@@ -1403,14 +1404,14 @@ def cli_main(argv=None):
 
     ui_url = f"http://{args.host}:{args.port}"
 
-    # ── Load silently first ────────────────────────────────────────────────
+    # -- Load silently first ------------------------------------------------
     print(f"  Loading project...")
     if args.project:
         ok = load_project(args.project)
     else:
         default = ROCKO_ROOT / "projects" / "ThePaperTeam" / "project.json"
         ok = load_project(str(default)) if default.exists() else False
-        if not ok: print("  No project specified — starting without project")
+        if not ok: print("  No project specified - starting without project")
 
     if ok:
         proj_name = PROJECT.get("project", {}).get("name", "?")
@@ -1437,7 +1438,7 @@ def cli_main(argv=None):
         print(f"  Validation: passed")
     print()
 
-    # ── Open app window ────────────────────────────────────────────────────
+    # -- Open app window ----------------------------------------------------
     if not args.no_browser:
         def _open_app(url):
             time.sleep(2.0)
@@ -1463,47 +1464,47 @@ def cli_main(argv=None):
             if not launched: webbrowser.open(url)
         threading.Thread(target=_open_app, args=(f"{ui_url}/",), daemon=True).start()
 
-    # ── Banner (after all loading, just before uvicorn) ────────────────────
+    # -- Banner (after all loading, just before uvicorn) --------------------
     BANNER = r"""
-██████╗  ██████╗  ██████╗██╗  ██╗ ██████╗      █████╗  ██████╗ ███████╗███╗   ██╗████████╗███████╗
-██╔══██╗██╔═══██╗██╔════╝██║ ██╔╝██╔═══██╗    ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝██╔════╝
-██████╔╝██║   ██║██║     █████╔╝ ██║   ██║    ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ███████╗
-██╔══██╗██║   ██║██║     ██╔═██╗ ██║   ██║    ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ╚════██║
-██║  ██║╚██████╔╝╚██████╗██║  ██╗╚██████╔╝    ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ███████║
-╚═╝  ╚═╝ ╚═════╝  ╚═════╝╚═╝  ╚═╝ ╚═════╝    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝
+######+  ######+  ######+##+  ##+ ######+      #####+  ######+ #######+###+   ##+########+#######+
+##+==##+##+===##+##+====+##| ##++##+===##+    ##+==##+##+====+ ##+====+####+  ##|+==##+==+##+====+
+######++##|   ##|##|     #####++ ##|   ##|    #######|##|  ###+#####+  ##+##+ ##|   ##|   #######+
+##+==##+##|   ##|##|     ##+=##+ ##|   ##|    ##+==##|##|   ##|##+==+  ##|+##+##|   ##|   +====##|
+##|  ##|+######+++######+##|  ##++######++    ##|  ##|+######++#######+##| +####|   ##|   #######|
++=+  +=+ +=====+  +=====++=+  +=+ +=====+    +=+  +=+ +=====+ +======++=+  +===+   +=+   +======+
 """
     print(BANNER)
-    print("  " + "─" * 94)
+    print("  " + "-" * 94)
     print("  Self-hosted local agent orchestration  |  v5.0")
-    print("  " + "─" * 94)
+    print("  " + "-" * 94)
     print()
-    print("┌   RockoAgents starting")
-    print("│")
-    print(f"│  Bridge:  {ui_url}")
-    print(f"│  UI:      {ui_url}/")
-    print("│")
-    print("│  Status:")
-    print(f"│    {'✓' if ok else '○'}  {'Project loaded' if ok else 'No project — use UI to add one'}")
-    if v["errors"]:   print(f"│    ✕  Validation: {len(v['errors'])} error(s)")
-    elif v["warns"]:  print(f"│    ⚠  Validation: passed with {len(v['warns'])} warning(s)")
-    else:             print("│    ✓  Validation: passed")
-    print("│    ✓  Scheduler: ready")
-    print("│    ✓  Task worker: running")
-    print("│    ✓  CEO orchestrator: ready")
-    print("│")
-    print("│  Details:  /validate  ·  /project  ·  /logs  ·  /docs")
-    print("│")
+    print("+   RockoAgents starting")
+    print("|")
+    print(f"|  Bridge:  {ui_url}")
+    print(f"|  UI:      {ui_url}/")
+    print("|")
+    print("|  Status:")
+    print(f"|    {'OK' if ok else 'o'}  {'Project loaded' if ok else 'No project - use UI to add one'}")
+    if v["errors"]:   print(f"|    FAIL  Validation: {len(v['errors'])} error(s)")
+    elif v["warns"]:  print(f"|    WARN  Validation: passed with {len(v['warns'])} warning(s)")
+    else:             print("|    OK  Validation: passed")
+    print("|    OK  Scheduler: ready")
+    print("|    OK  Task worker: running")
+    print("|    OK  CEO orchestrator: ready")
+    print("|")
+    print("|  Details:  /validate  .  /project  .  /logs  .  /docs")
+    print("|")
     if args.verbose:
-        print(f"│  [verbose] Project root: {PROJECT_ROOT or 'none'}")
-        print(f"│  [verbose] Data dir:     {DATA_DIR}")
-        for e in v.get("errors", []): print(f"│  ✕ {e}")
-        for w in v.get("warns",  []): print(f"│  ⚠ {w}")
-        print("│")
+        print(f"|  [verbose] Project root: {PROJECT_ROOT or 'none'}")
+        print(f"|  [verbose] Data dir:     {DATA_DIR}")
+        for e in v.get("errors", []): print(f"|  FAIL {e}")
+        for w in v.get("warns",  []): print(f"|  WARN {w}")
+        print("|")
     if not args.no_browser:
-        print(f"└  RockoAgents is ready.")
+        print(f"+  RockoAgents is ready.")
         print(f"   Opening {ui_url}/ in app window")
     else:
-        print(f"└  RockoAgents is ready.")
+        print(f"+  RockoAgents is ready.")
         print(f"   Open {ui_url}/")
     print()
 

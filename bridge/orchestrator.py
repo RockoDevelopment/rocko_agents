@@ -8,7 +8,7 @@ import json, time, uuid
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-# ── Valid CEO decisions ───────────────────────────────────────────────────────
+# -- Valid CEO decisions -------------------------------------------------------
 VALID_DECISIONS = {
     "approve",          # proceed with execution
     "reject",           # stop pipeline, do not execute
@@ -26,10 +26,10 @@ VALID_DECISIONS = {
     "fire_agent",       # deactivate an underperforming agent
 }
 
-# ── CEO system prompt template ────────────────────────────────────────────────
+# -- CEO system prompt template ------------------------------------------------
 CEO_ORCHESTRATION_PROMPT = """You are the CEO orchestrator of an autonomous agent pipeline.
 
-You receive the full pipeline context — every agent and executor output — and you must decide what to do next.
+You receive the full pipeline context - every agent and executor output - and you must decide what to do next.
 
 You MUST respond with ONLY valid JSON. No markdown, no explanation outside the JSON.
 
@@ -64,8 +64,8 @@ Rules:
 - You cannot approve execution unless all risk checks passed
 - You cannot bypass the risk manager
 - If allow_execution is true, requires_human_approval must also be true unless explicitly safe
-- created_tasks is optional — only include if you are creating follow-up work
-- posture is optional — only include if you are changing system posture
+- created_tasks is optional - only include if you are creating follow-up work
+- posture is optional - only include if you are changing system posture
 """
 
 class CEOOrchestrator:
@@ -87,14 +87,14 @@ class CEOOrchestrator:
     def _log(self, msg: str):
         self._log_fn(f"[ORCHESTR] {msg}")
 
-    # ── Find CEO agent ────────────────────────────────────────────────────────
+    # -- Find CEO agent --------------------------------------------------------
     def _find_ceo(self) -> Optional[Dict]:
         for a in self._project.get("agents", []):
             if a.get("role") == "ceo":
                 return a
         return None
 
-    # ── Permission validation ─────────────────────────────────────────────────
+    # -- Permission validation -------------------------------------------------
     def _validate_decision(self, decision: Dict, pipeline_ctx: Dict) -> Dict:
         """
         Validates the CEO decision against project permissions.
@@ -109,7 +109,7 @@ class CEOOrchestrator:
         steps    = {s["step_id"]: s for s in pipeline.get("execution_order", [])}
 
         # HARD SAFETY RULE: If ANY executor step exists in pipeline, human approval
-        # is ALWAYS required. This cannot be overridden by CEO — not even by allow_execution=True.
+        # is ALWAYS required. This cannot be overridden by CEO - not even by allow_execution=True.
         has_executor = any(s.get("type") == "executor" for s in pipeline.get("execution_order", []))
         if has_executor:
             if not decision.get("requires_human_approval"):
@@ -147,7 +147,7 @@ class CEOOrchestrator:
 
         return decision
 
-    # ── Parse CEO JSON ────────────────────────────────────────────────────────
+    # -- Parse CEO JSON --------------------------------------------------------
     def _parse_ceo_json(self, raw_text: str) -> Dict:
         text = raw_text.strip()
         # Strip markdown fences if present
@@ -159,7 +159,7 @@ class CEOOrchestrator:
         except json.JSONDecodeError as e:
             raise ValueError(f"CEO returned invalid JSON: {e}\n\nRaw response:\n{raw_text[:500]}")
 
-    # ── Main orchestration call ───────────────────────────────────────────────
+    # -- Main orchestration call -----------------------------------------------
     def orchestrate(self, pipeline_ctx: Dict, step: Dict = None) -> Dict:
         """
         Call the CEO agent in orchestration mode with full pipeline context.
@@ -167,7 +167,7 @@ class CEOOrchestrator:
         """
         ceo_def = self._find_ceo()
         if not ceo_def:
-            self._log("No CEO agent defined in project — defaulting to hold")
+            self._log("No CEO agent defined in project - defaulting to hold")
             return self._default_hold("No CEO agent defined")
 
         ceo_id  = ceo_def["id"]
@@ -255,10 +255,10 @@ Based on all upstream outputs, provide your orchestration decision as JSON."""
         self._decisions.insert(0, record)
         if len(self._decisions) > 50: self._decisions = self._decisions[:50]
 
-        self._log(f"CEO decision: {decision['decision']} — {decision.get('reason', '')[:80]}")
+        self._log(f"CEO decision: {decision['decision']} - {decision.get('reason', '')[:80]}")
         return {**decision, "_run_id": run_id, "_duration_ms": dur, "_created_tasks": created}
 
-    # ── Apply decision to pipeline ────────────────────────────────────────────
+    # -- Apply decision to pipeline --------------------------------------------
     def apply_to_pipeline(self, decision: Dict, pipeline_steps: List[Dict],
                           current_ctx: Dict) -> Dict:
         """
@@ -346,7 +346,7 @@ Based on all upstream outputs, provide your orchestration decision as JSON."""
             "created_tasks":           [],
         }
 
-    # ── History ───────────────────────────────────────────────────────────────
+    # -- History ---------------------------------------------------------------
     def get_decisions(self) -> List[Dict]:
         return self._decisions
 

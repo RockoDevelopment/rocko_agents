@@ -7,7 +7,7 @@ import json, os, time, urllib.request, urllib.error
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-# ── Globals set by bridge on load ─────────────────────────────────────────────
+# -- Globals set by bridge on load ---------------------------------------------
 _project:  Dict = {}
 _env_vars: Dict = {}
 
@@ -29,7 +29,7 @@ def load_env(root_path: str) -> Dict:
                     env[k.strip()] = v.strip().strip('"').strip("'")
     return env
 
-# ── Model resolution ──────────────────────────────────────────────────────────
+# -- Model resolution ----------------------------------------------------------
 def resolve_model(agent_def: Dict) -> Tuple[str, str, Dict]:
     """
     Returns (model_name, provider_key, provider_config)
@@ -51,7 +51,7 @@ def resolve_api_key(provider_cfg: Dict, env: Dict) -> Optional[str]:
         return None
     return env.get(env_var)
 
-# ── Normalised response ───────────────────────────────────────────────────────
+# -- Normalised response -------------------------------------------------------
 def _norm(text: str, model: str, provider: str, duration_ms: int,
           tokens: Dict, fallback_used: bool = False) -> Dict:
     return {
@@ -77,7 +77,7 @@ def _err(reason: str, model: str, provider: str, duration_ms: int) -> Dict:
         "content": [],
     }
 
-# ── Anthropic ────────────────────────────────────────────────────────────────
+# -- Anthropic ----------------------------------------------------------------
 def _call_anthropic(model: str, api_key: str, api_base: str,
                     system: str, messages: list, max_tokens: int = 1500) -> Dict:
     t0  = time.time()
@@ -103,7 +103,7 @@ def _call_anthropic(model: str, api_key: str, api_base: str,
     except Exception as e:
         return _err(str(e), model, "anthropic", round((time.time()-t0)*1000))
 
-# ── OpenAI-compatible (also covers local Ollama) ─────────────────────────────
+# -- OpenAI-compatible (also covers local Ollama) -----------------------------
 def _call_openai_compat(model: str, api_key: Optional[str], api_base: str,
                          system: str, messages: list, max_tokens: int = 1500) -> Dict:
     t0  = time.time()
@@ -130,11 +130,11 @@ def _call_openai_compat(model: str, api_key: Optional[str], api_base: str,
     except Exception as e:
         return _err(str(e), model, "openai_compatible", round((time.time()-t0)*1000))
 
-# ── Main entry point ──────────────────────────────────────────────────────────
+# -- Main entry point ----------------------------------------------------------
 def run_agent_model(agent_def: Dict, system_prompt: str, messages: list,
                     project_root: str = "", max_tokens: int = 1500) -> Dict:
     """
-    Full model resolution → API call → normalised response.
+    Full model resolution -> API call -> normalised response.
     Attempts fallback_model if primary fails.
     """
     env          = load_env(project_root) if project_root else _env_vars
@@ -146,7 +146,7 @@ def run_agent_model(agent_def: Dict, system_prompt: str, messages: list,
     # Validate key if required
     if prov_type not in ("local",) and not api_key:
         env_var = prov_cfg.get("api_key_env") or prov_cfg.get("env_var", "?")
-        return _err(f"API key missing — set {env_var} in .env", model, prov_key, 0)
+        return _err(f"API key missing - set {env_var} in .env", model, prov_key, 0)
 
     # Primary call
     # nvidia uses openai_compatible format with their own base URL
@@ -183,7 +183,7 @@ def run_agent_model(agent_def: Dict, system_prompt: str, messages: list,
 
     return result
 
-# Built-in provider registry — shown even if not in project.json
+# Built-in provider registry - shown even if not in project.json
 BUILTIN_PROVIDERS = {
     "anthropic": {
         "type": "anthropic",
@@ -207,7 +207,7 @@ BUILTIN_PROVIDERS = {
         "api_base": "https://integrate.api.nvidia.com/v1",
         "api_key_env": "NVIDIA_API_KEY",
         "key_required": True,
-        "user_owned": True,  # user brings their own key — RockoAgents provides no NVIDIA access
+        "user_owned": True,  # user brings their own key - RockoAgents provides no NVIDIA access
         "docs_url": "https://build.nvidia.com/",
         "available_models": [
             "nvidia/llama-3.1-nemotron-ultra-253b-v1",
@@ -232,7 +232,7 @@ BUILTIN_PROVIDERS = {
 }
 
 def get_provider_status(project_root: str = "") -> Dict:
-    """Returns provider health — whether API keys are present (not the keys themselves)."""
+    """Returns provider health - whether API keys are present (not the keys themselves)."""
     env       = load_env(project_root) if project_root else _env_vars
     providers = _project.get("model", {}).get("providers", {})
     status    = {}
