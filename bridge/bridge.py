@@ -1148,25 +1148,8 @@ def _save_companies(data: dict):
         json.dump(data, fp, indent=2)
 
 def _auto_migrate_paperteam():
-    """If no companies exist and ThePaperTeam is loaded, create a company record."""
-    companies = _load_companies()
-    if companies: return
-    if not PROJECT: return
-    proj_name = PROJECT.get("project", {}).get("name", "")
-    if not proj_name: return
-    cid = proj_name.lower().replace(" ", "_") + "_migrated"
-    companies[cid] = {
-        "id":           cid,
-        "display_name": PROJECT.get("project", {}).get("display_name") or proj_name,
-        "description":  PROJECT.get("project", {}).get("description", ""),
-        "logo_path":    "",
-        "project_path": PROJECT_ROOT,
-        "active":       True,
-        "created_at":   datetime.now().isoformat(),
-        "updated_at":   datetime.now().isoformat(),
-    }
-    _save_companies(companies)
-    _log("info", f"Auto-migrated '{proj_name}' as company record")
+    """Disabled - users create their own companies via the UI after login."""
+    pass
 
 @app.get("/companies")
 async def list_companies(request: Request):
@@ -1419,37 +1402,28 @@ def cli_main(argv=None):
     ui_url = f"http://{args.host}:{args.port}"
 
     # -- Load silently first ------------------------------------------------
-    print(f"  Loading project...")
+    # Load project only if explicitly passed - never hardcode a default
+    ok = False
     if args.project:
+        print(f"  Loading project...")
         ok = load_project(args.project)
-    else:
-        default = ROCKO_ROOT / "projects" / "ThePaperTeam" / "project.json"
-        ok = load_project(str(default)) if default.exists() else False
-        if not ok: print("  No project specified - starting without project")
-
-    if ok:
-        proj_name = PROJECT.get("project", {}).get("name", "?")
-        print(f"  Project: {proj_name}")
-
+        if ok:
+            proj_name = PROJECT.get("project", {}).get("name", "?")
+            print(f"  Project: {proj_name}")
     print(f"  Initialising subsystems...")
-    if ok:
-        try:
-            _init_subsystems()
-            print(f"  Scheduler: ready")
-            print(f"  Task worker: running")
-            print(f"  Orchestrator: ready")
-            print(f"  Model manager: ready")
-        except Exception as e:
-            print(f"  Subsystem warning: {e}")
+    try:
+        _init_subsystems()
+        print(f"  Scheduler: ready")
+        print(f"  Task worker: running")
+        print(f"  Orchestrator: ready")
+        print(f"  Model manager: ready")
+    except Exception as e:
+        print(f"  Subsystem warning: {e}")
 
-    print(f"  Running validation...")
-    v = validate_project() if ok else {"valid": False, "errors": ["No project loaded"], "warns": []}
-    if v["errors"]:
-        print(f"  Validation: {len(v['errors'])} error(s)")
-    elif v["warns"]:
-        print(f"  Validation: passed with {len(v['warns'])} warning(s)")
-    else:
-        print(f"  Validation: passed")
+    # Run validation silently - results available at /validate endpoint
+    if ok:
+        try: validate_project()
+        except: pass
     print()
 
     # -- Open app window ----------------------------------------------------
@@ -1499,9 +1473,6 @@ def cli_main(argv=None):
     print("|")
     print("|  Status:")
     print(f"|    {'OK' if ok else 'o'}  {'Project loaded' if ok else 'No project - use UI to add one'}")
-    if v["errors"]:   print(f"|    FAIL  Validation: {len(v['errors'])} error(s)")
-    elif v["warns"]:  print(f"|    WARN  Validation: passed with {len(v['warns'])} warning(s)")
-    else:             print("|    OK  Validation: passed")
     print("|    OK  Scheduler: ready")
     print("|    OK  Task worker: running")
     print("|    OK  CEO orchestrator: ready")
