@@ -26,7 +26,6 @@ class TaskWorker:
         self.runs_file   = data_dir / "task_runs.json"
         self._executor_fn = executor_fn   # fn(executor_id, context) -> dict
         self._agent_fn    = agent_fn      # fn(agent_def, system, messages) -> dict
-        self._runtime_fn  = runtime_fn    # fn(runtime_id, context) -> dict
         self._runtime_fn  = runtime_fn    # fn(runtime_id, context, agent_id) -> dict
         self.concurrency  = concurrency
         self.max_retries  = max_retries
@@ -58,7 +57,10 @@ class TaskWorker:
             self._save()
 
     def _log(self, msg: str):
-        self._log_fn(f"[WORKER ] {msg}")
+        try:
+            self._log_fn(f"[WORKER ] {msg}")
+        except TypeError:
+            self._log_fn("info", f"[WORKER ] {msg}")
 
     # ── Persistence ───────────────────────────────────────────────────────────
     def load(self):
