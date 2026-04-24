@@ -289,7 +289,8 @@ class RuntimeManager:
             result = _result(False, runtime_id, rtype, time.time(),
                              error=f"Unknown runtime type: '{rtype}'")
         self._record(runtime_id, result)
-        self._log(f"{"OK" if result["ok"] else "FAIL"} Runtime '{runtime_id}': {result['duration_ms']}ms")
+        status_word = "OK" if result["ok"] else "FAIL"
+        self._log(f"{status_word} Runtime '{runtime_id}': {result['duration_ms']}ms")
         return result
 
     def _record(self, runtime_id: str, result: Dict):

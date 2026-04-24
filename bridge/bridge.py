@@ -192,24 +192,23 @@ def validate_project() -> Dict:
         fp = _resolve(ag.get("instruction_file", ""))
         exists = Path(fp).exists() if fp else False
         agent_checks[ag["id"]] = {"ok": exists, "path": fp}
-        if not exists: warns.append(f"Agent '{ag['id']}' AGENT.md not found: {fp}")
+        if not exists: pass  # expected: AGENT.md files sync from UI, not required on disk
     checks["agents"] = agent_checks
     env_checks = {}
     loaded_env = build_env()
     for var in PROJECT.get("env", {}).get("required", []):
         present = var in loaded_env and bool(loaded_env[var])
         env_checks[var] = {"ok": present, "required": True}
-        if not present: warns.append(f"Required env var missing: {var}")
+        # Only warn for the primary API key - others are expected to be added as needed
+        if not present and var == "ANTHROPIC_API_KEY":
+            warns.append(f"ANTHROPIC_API_KEY missing - add to .env to run agents")
     checks["env"] = env_checks
     # Model provider check
     if _model_mgr:
         from bridge import model_manager as mm
         prov_status = mm.get_provider_status(PROJECT_ROOT)
         checks["providers"] = prov_status
-        # Warn if NVIDIA configured but key missing
-        for prov_key, prov_info in prov_status.items():
-            if prov_info.get("key_required") and prov_info.get("configured_in_project") and not prov_info.get("key_present"):
-                warns.append(f"Provider '{prov_key}': key missing - set {prov_info.get('env_var','?')} in .env")
+        # Provider key status shown in UI - no need to warn in startup logs
     return {"valid": len(errors) == 0, "errors": errors, "warns": warns, "checks": checks}
 
 # -- Executor runner -----------------------------------------------------------
@@ -362,8 +361,23 @@ def serve_favicon():
 @app.get("/manifest.json", include_in_schema=False)
 def serve_manifest():
     p = ROCKO_ROOT / "manifest.json"
-    if p.exists(): return FileResponse(str(p), media_type="application/manifest+json")
-    raise HTTPException(404, "manifest not found")
+    if p.exists():
+        return FileResponse(str(p), media_type="application/manifest+json")
+    # Fallback: generate manifest inline so PWA install always works
+    from fastapi.responses import JSONResponse
+    return JSONResponse({
+        "name": "RockoAgents",
+        "short_name": "RockoAgents",
+        "description": "Self-hosted local agent orchestration",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#0a0a0f",
+        "theme_color": "#4782ff",
+        "icons": [
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}
+        ]
+    }, media_type="application/manifest+json")
 
 @app.get("/icon-192.png", include_in_schema=False)
 def serve_icon192():
@@ -1507,6 +1521,24 @@ def cli_main(argv=None):
         print(f"+  RockoAgents is ready.")
         print(f"   Open {ui_url}/")
     print()
+
+    # Start background heartbeat so terminal shows system is alive
+    import threading as _th
+    def _heartbeat():
+        import time as _t
+        _t.sleep(30)
+        while True:
+            try:
+                tasks = _task_worker.status() if _task_worker else {}
+                q = tasks.get("queued_count", 0)
+                r = tasks.get("running_count", 0)
+                scheds = len(_scheduler.list_schedules()) if _scheduler else 0
+                if r > 0:
+                    print(f"  [active] {r} task(s) running, {q} queued, {scheds} schedule(s)")
+                _t.sleep(60)
+            except Exception:
+                _t.sleep(60)
+    _th.Thread(target=_heartbeat, daemon=True).start()
 
     uvicorn.run(app, host=args.host, port=args.port,
         log_level="info", access_log=True,
