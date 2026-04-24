@@ -1,0 +1,91 @@
+name: Build Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows (rocko.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install fastapi "uvicorn[standard]" pydantic aiofiles apscheduler python-dotenv pyinstaller
+
+      - name: Build
+        run: python build.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocko-windows
+          path: rocko.exe
+
+  build-macos:
+    name: macOS (rocko)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install fastapi "uvicorn[standard]" pydantic aiofiles apscheduler python-dotenv pyinstaller
+
+      - name: Build
+        run: python build.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocko-macos
+          path: rocko
+
+  release:
+    name: Create Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: rocko-windows
+          path: ./artifacts/windows/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: rocko-macos
+          path: ./artifacts/macos/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/windows/rocko.exe
+            artifacts/macos/rocko
+          body: |
+            ## RockoAgents ${{ github.ref_name }}
+
+            ### Download and run
+
+            **Windows:** Download `rocko.exe`, place it in your `RockoAgentHub` folder, double-click or run `rocko.exe run` from terminal.
+
+            **Mac:** Download `rocko`, place it in your `RockoAgentHub` folder, run `chmod +x rocko && ./rocko run`.
+
+            No Python required. No install step.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

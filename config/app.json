@@ -1,0 +1,13 @@
+{
+  "_comment": "RockoAgents startup configuration. Change default_project here to switch which project auto-loads. Do not edit platform.js or core logic to change defaults.",
+  "app_name": "RockoAgents",
+  "version": "1.0",
+  "auto_load_default_project": true,
+  "default_project": "ThePaperTeam",
+  "default_project_path": "./projects/ThePaperTeam/project.json",
+  "theme": "dark",
+  "log_level": "info",
+  "show_external_steps_in_pipeline": true,
+  "validate_on_load": true,
+  "max_log_lines": 100
+}

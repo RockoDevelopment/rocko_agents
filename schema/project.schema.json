@@ -1,0 +1,198 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RockoAgents Project Manifest v2.0",
+  "description": "Standard manifest schema for any project loaded into RockoAgents. All projects — including ThePaperTeam — must conform to this schema.",
+  "type": "object",
+  "required": ["schema_version","project","model","agents","pipeline"],
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["2.0"] },
+    "project": {
+      "type": "object",
+      "required": ["id","name","root_path"],
+      "properties": {
+        "id":               { "type": "string", "description": "Unique lowercase snake_case identifier" },
+        "name":             { "type": "string" },
+        "display_name":     { "type": "string" },
+        "description":      { "type": "string" },
+        "version":          { "type": "string" },
+        "root_path":        { "type": "string", "description": "Absolute path to project root" },
+        "environment_file": { "type": "string" },
+        "created":          { "type": "string" },
+        "tags":             { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["default_provider","default_model"],
+      "properties": {
+        "default_provider": { "type": "string" },
+        "default_model":    { "type": "string" },
+        "fallback_model":   { "type": "string" },
+        "providers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type":        { "type": "string", "enum": ["anthropic","openai_compatible","custom"] },
+              "api_base":    { "type": "string" },
+              "api_key_env": { "type": "string" },
+              "temperature": { "type": "number" },
+              "max_tokens":  { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "description": "All paths relative to root_path unless absolute",
+      "properties": {
+        "agents_root":  { "type": "string" },
+        "vault_root":   { "type": "string" },
+        "logs_root":    { "type": "string" },
+        "outputs_root": { "type": "string" },
+        "data_root":    { "type": "string" },
+        "src_root":     { "type": "string" }
+      }
+    },
+    "databases": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type","path"],
+        "properties": {
+          "type":        { "type": "string", "enum": ["sqlite","json","csv","postgres","custom"] },
+          "path":        { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "vault": {
+      "type": "object",
+      "properties": {
+        "root":        { "type": "string" },
+        "folders":     { "type": "object" },
+        "description": { "type": "string" }
+      }
+    },
+    "env": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "array", "items": { "type": "string" } },
+        "optional": { "type": "array", "items": { "type": "string" } },
+        "env_file":  { "type": "string" }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "enabled":       { "type": "boolean" },
+          "allowed_paths": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "apis": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["base_url"],
+        "properties": {
+          "enabled":         { "type": "boolean" },
+          "base_url":        { "type": "string" },
+          "auth_type":       { "type": "string", "enum": ["none","api_key","bearer","basic","custom"] },
+          "api_key_env":     { "type": ["string","null"] },
+          "timeout_seconds": { "type": "number" },
+          "retry_count":     { "type": "integer" }
+        }
+      }
+    },
+    "executors": {
+      "type": "object",
+      "description": "Non-prompt pipeline steps — local code entry points",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type":        { "type": "string", "enum": ["python_module","shell","api","custom"] },
+          "label":       { "type": "string" },
+          "script_path": { "type": "string" },
+          "entry":       { "type": "string" },
+          "working_dir": { "type": "string" },
+          "env_file":    { "type": "string" },
+          "run_mode":    { "type": "string", "enum": ["subprocess","import","api","none"] }
+        }
+      }
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id","name","role","instruction_file"],
+        "properties": {
+          "id":               { "type": "string" },
+          "name":             { "type": "string" },
+          "display_name":     { "type": "string" },
+          "role":             { "type": "string", "enum": ["ceo","analyst","engine","custom"] },
+          "type":             { "type": "string", "enum": ["prompt","hybrid","executor"] },
+          "instruction_file": { "type": "string", "description": "Path to AGENT.md relative to root_path" },
+          "model_provider":   { "type": "string" },
+          "model_override":   { "type": ["string","null"] },
+          "pipeline_step":    { "type": ["string","integer","null"] },
+          "enabled":          { "type": "boolean" },
+          "project_tools":    { "type": "array", "items": { "type": "string" } },
+          "apis":             { "type": "array", "items": { "type": "string" } },
+          "description":      { "type": "string" },
+          "local_code": {
+            "type": ["object","null"],
+            "properties": {
+              "type":        { "type": "string" },
+              "script_path": { "type": "string" },
+              "entry":       { "type": "string" },
+              "working_dir": { "type": "string" },
+              "env_file":    { "type": "string" },
+              "run_mode":    { "type": "string" }
+            }
+          },
+          "_instructions": { "type": "string", "description": "Embedded instructions for portability (optional; AGENT.md is primary)" }
+        }
+      }
+    },
+    "pipeline": {
+      "type": "object",
+      "required": ["execution_order"],
+      "properties": {
+        "mode":            { "type": "string", "enum": ["sequential","parallel","mixed"] },
+        "on_block":        { "type": "string" },
+        "on_error":        { "type": "string" },
+        "execution_order": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["step_id","label","type"],
+            "properties": {
+              "step_id":     { "type": "string" },
+              "label":       { "type": "string" },
+              "type":        { "type": "string", "enum": ["agent","executor","external"] },
+              "agent_id":    { "type": ["string","null"] },
+              "executor_id": { "type": ["string","null"] }
+            }
+          }
+        }
+      }
+    },
+    "logs": {
+      "type": "object",
+      "properties": {
+        "root":         { "type": "string" },
+        "pipeline_log": { "type": "string" },
+        "agent_log":    { "type": "string" },
+        "error_log":    { "type": "string" },
+        "format":       { "type": "string", "enum": ["jsonl","text","csv"] },
+        "rotation":     { "type": "string" },
+        "retain_days":  { "type": "integer" }
+      }
+    },
+    "validation": { "type": "object" }
+  }
+}

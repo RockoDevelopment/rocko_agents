@@ -1,0 +1,52 @@
+# ── Your personal projects (never commit these) ───────────────────────────────
+# Each user's projects live only on their own machine.
+# Use the UI to create companies/projects — they stay local.
+projects/*/
+!projects/.gitkeep
+!templates/
+
+# ── Runtime data (written by the bridge, machine-specific) ───────────────────
+data/
+dist/
+build/
+*.spec.bak
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# ── Secrets — never commit these ─────────────────────────────────────────────
+*.key
+*.pem
+*.secret
+secrets.json
+
+# ── Skills cache (fetched from GitHub, machine-specific) ─────────────────────
+.rocko_skills/
+
+# ── PyInstaller build artifacts ───────────────────────────────────────────────
+dist/
+build/
+*.spec.tmp
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor ───────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
