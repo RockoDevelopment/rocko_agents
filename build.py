@@ -38,7 +38,7 @@ def main():
     )
 
     if result.returncode != 0:
-        print("\n✕ Build failed. Check output above.")
+        print("\nFAIL Build failed. Check output above.")
         sys.exit(1)
 
     # Copy exe to root
@@ -49,13 +49,13 @@ def main():
     if src.exists():
         shutil.copy2(src, dst)
         size_mb = dst.stat().st_size / 1024 / 1024
-        print(f"\n✓ Build complete!")
-        print(f"  Output:  {dst}")
-        print(f"  Size:    {size_mb:.1f} MB")
-        print(f"\nUsers can now run:  rocko run")
+        print("\nBuild complete!")
+        print("  Output: " + str(dst))
+        print("  Size: %.1f MB" % size_mb)
+        print("\nUsers can now run: rocko run")
         print(f"(copy rocko{ext} to wherever they clone the repo)")
     else:
-        print(f"\n✕ Expected output not found at {src}")
+        print(f"\nFAIL Expected output not found at {src}")
         sys.exit(1)
 
 if __name__ == '__main__':
