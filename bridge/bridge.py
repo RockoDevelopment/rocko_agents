@@ -295,7 +295,7 @@ def _init_subsystems():
         return {"ok": False, "error": "Runtime manager not ready"}
 
     _task_worker = TaskWorker(DATA_DIR, run_executor_sync, _agent_call, _runtime_call)
-    _task_worker.init(PROJECT, _log)
+    _task_worker.init(PROJECT, lambda msg: _log("info", msg))
     # Recovery: count what was restored from disk
     all_tasks    = _task_worker.get_tasks()
     interrupted  = [t for t in all_tasks if t.get("error") == "Recovered after bridge restart"]
@@ -322,17 +322,17 @@ def _init_subsystems():
 
     from scheduler import SchedulerManager
     _scheduler = SchedulerManager(DATA_DIR, _schedule_fire)
-    _scheduler.init(_log)
+    _scheduler.init(lambda msg: _log("info", msg))
     _scheduler.start()
     _log("info", f"Schedule recovery: {len(_scheduler.list_schedules())} schedule(s) reloaded from disk")
 
     from orchestrator import CEOOrchestrator
     _orchestrator = CEOOrchestrator(_agent_call, _task_worker)
-    _orchestrator.init(PROJECT, _log)
+    _orchestrator.init(PROJECT, lambda msg: _log("info", msg))
 
     from runtime_manager import RuntimeManager
     _runtime_mgr = RuntimeManager()
-    _runtime_mgr.init(PROJECT, _log)
+    _runtime_mgr.init(PROJECT, lambda msg: _log("info", msg))
 
     # Re-init task worker with runtime support
     _task_worker._runtime_fn = lambda rid, ctx, aid: _runtime_mgr.execute(rid, ctx, aid)
