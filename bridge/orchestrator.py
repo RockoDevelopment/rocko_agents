@@ -55,9 +55,26 @@ Your response must match this exact schema:
   "skill_repo": "owner/repo (for assign_skill decisions, e.g. anthropics/skills)",
   "skill_name": "skill-name (for assign_skill decisions, e.g. frontend-design)",
   "target_agent_id": "agent_id (for assign_skill, fire_agent decisions)",
-  "agent_name": "New Agent Name (for hire_agent decisions)",
-  "agent_role": "analyst|engine|ceo|custom (for hire_agent decisions)"
+  "agent_name": "New Agent Name (for hire_agent decisions - single agent)",
+  "agent_role": "analyst|engine|ceo|custom (for hire_agent decisions)",
+  "agents": [
+    {
+      "name": "Agent Display Name",
+      "role": "analyst|engine|ceo|custom",
+      "agent_id": "snake_case_id",
+      "description": "What this agent does",
+      "instructions": "Full AGENT.md content for this agent",
+      "skills": [{"repo": "owner/repo", "skill_name": "skill-name"}]
+    }
+  ]
 }
+
+When building a team:
+- Use "hire_agent" decision with the "agents" array to create multiple agents at once
+- Write complete AGENT.md instructions for each agent - these become their system prompts
+- Assign skills from skills.sh where relevant to enhance agent capabilities
+- Place agents in logical pipeline order based on their roles
+- Always respect company policy on whether auto-creation is allowed
 
 Rules:
 - If you are uncertain, choose "hold" and set requires_human_approval to true
@@ -321,11 +338,24 @@ Based on all upstream outputs, provide your orchestration decision as JSON."""
             }
 
         elif cmd == "hire_agent":
+            # Support both single agent and agents[] array
+            agents = decision.get("agents", [])
+            if not agents and decision.get("agent_name"):
+                # Legacy single-agent format
+                agents = [{
+                    "name":         decision.get("agent_name"),
+                    "role":         decision.get("agent_role", "analyst"),
+                    "agent_id":     decision.get("agent_id", ""),
+                    "description":  decision.get("reason", ""),
+                    "instructions": decision.get("instructions", ""),
+                    "skills":       decision.get("skills", []),
+                }]
             return {
-                "action":      "hire_agent",
-                "agent_name":  decision.get("agent_name"),
-                "agent_role":  decision.get("agent_role", "analyst"),
-                "description": decision.get("reason"),
+                "action":     "hire_agent",
+                "agents":     agents,
+                "reason":     decision.get("reason", ""),
+                "requires_approval": decision.get("requires_human_approval", True),
+                "auto_create": not decision.get("requires_human_approval", True),
             }
 
         elif cmd == "fire_agent":

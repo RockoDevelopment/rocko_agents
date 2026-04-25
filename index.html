@@ -533,6 +533,15 @@ body { display:flex; flex-direction:row; overflow:hidden; }
 .badge-dot.offline{background:var(--red);}
 .badge-dot.unchecked{background:var(--text-dim);}
 
+
+/* -- Team review cards --------------------------------- */
+.team-agent-card{background:var(--bg-card);border:1px solid var(--border);padding:14px 16px;margin-bottom:10px;}
+.team-agent-name{font-family:var(--cond);font-size:16px;font-weight:700;margin-bottom:4px;}
+.team-agent-role{font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;}
+.team-agent-desc{font-size:12px;color:var(--text-secondary);margin-bottom:8px;line-height:1.5;}
+.team-agent-meta{font-family:var(--mono);font-size:10px;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap;}
+.team-skill-chip{font-family:var(--mono);font-size:9px;padding:2px 7px;background:rgba(71,130,255,.1);border:1px solid rgba(71,130,255,.3);color:var(--accent);margin-right:4px;}
+
 </style>
 <style>
 /* v4 additions */
@@ -757,6 +766,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
     <button class="btn btn-ghost" onclick="setTab('pipeline',null)">▶ Pipeline</button>
     <button class="btn btn-warn" style="font-size:10px;" onclick="syncAgentsNow()">⟳ Sync</button>
     <button class="btn btn-primary" onclick="openNewAgentModal()">+ New Agent</button>
+    <button class="btn btn-ghost" onclick="runBuildTeamTask()" title="Let CEO build a team from your company mission">&#9733; CEO Build Team</button>
   </div>
 </div>
 
@@ -1601,14 +1611,19 @@ const RockoCore = (() => {
   }
   function _buildAgent(def,manifest,instructions){
     const root=manifest.project.root_path;
-    const pk=def.model_provider||manifest.model.default_provider;
+    // Resolve provider: agent override -> company default -> no silent fallback
+    const _activeCo = typeof getActiveCompany === 'function' ? getActiveCompany() : null;
+    const _coProvider = _activeCo ? (_activeCo.default_provider || null) : null;
+    const pk = (def.model_provider && def.model_provider !== '__company_default__')
+      ? def.model_provider
+      : (_coProvider || manifest.model?.default_provider || '__unset__');
     const pc=manifest.model?.providers?.[pk]||{};
     const apis={};(def.apis||[]).forEach(k=>{const a=manifest.apis?.[k];if(a)apis[k]={...a,base_url:(a.base_url||'').replace('{{PROJECT_ROOT}}',root)};});
     const tools={};(def.project_tools||[]).forEach(k=>{const t=manifest.tools?.[k];if(t)tools[k]={...t,path:(t.path||'').replace('{{PROJECT_ROOT}}',root)};});
     let lc=null;if(def.local_code?.type){lc={...def.local_code,script_path:def.local_code.script_path?`${root}\${def.local_code.script_path}`:null,working_dir:def.local_code.working_dir?`${root}\${def.local_code.working_dir}`:null};}
     return{id:def.id,name:def.name,display_name:def.display_name||def.name,role:def.role,type:def.type||'prompt',
-      model:def.model_override||manifest.model.default_model,provider:pc.type||pk,provider_key:pk,
-      api_base:pc.api_base||'https://api.anthropic.com/v1',instructions,pipeline_step:def.pipeline_step,
+      model:def.model_override||((_activeCo&&_activeCo.default_model)||manifest.model?.default_model)||'',provider:pk,provider_key:pk,
+      api_base:pc.api_base||'',instructions,pipeline_step:def.pipeline_step,
       status:def.status||'idle',description:def.description||'',tools,apis,local_code:lc,
       tags:def.tags||[],project:manifest.project.name,instruction_file:def.instruction_file,
       model_override:def.model_override||null,created:def.created||new Date().toISOString().split('T')[0],
@@ -1617,6 +1632,10 @@ const RockoCore = (() => {
 
   // ── Model Layer ──────────────────────────────────────────────
   async function _callProvider(agent,messages){
+    // Guard: refuse to silently switch providers - show real state
+    if(!agent.provider || agent.provider==='__unset__'){
+      throw new Error('No provider configured. Create a company and select a model provider.');
+    }
     if(agent.provider==='anthropic'){
       const res=await fetch(`${agent.api_base}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model:agent.model,max_tokens:1000,system:agent.instructions||'You are a helpful agent.',messages})});
@@ -1771,7 +1790,7 @@ const RockoCore = (() => {
     const agentDefs=agents.length?agents:[{id:'ceo',name:'CEO',display_name:'CEO',role:'ceo',type:'prompt',instruction_file:'agents\\ceo\\AGENT.md',model_provider:'anthropic',model_override:null,pipeline_step:'ceo_step',enabled:true,project_tools:['filesystem','http'],apis:[],local_code:null,description:'Orchestrator.'}];
     const pipelineOrder=agentDefs.map(a=>({step_id:a.pipeline_step||a.id+'_step',label:a.name,type:'agent',agent_id:a.id,requires_approval:a.role==='ceo'}));
     return{schema_version:'2.0',project:{id,name,display_name:name,description,root_path:rootPath,environment_file:'.env',created:new Date().toISOString().split('T')[0],tags:[]},
-      model:{default_provider:'anthropic',default_model:'claude-sonnet-4-20250514',fallback_model:'claude-haiku-4-5-20251001',providers:{anthropic:{type:'anthropic',api_base:'https://api.anthropic.com/v1',api_key_env:'ANTHROPIC_API_KEY',temperature:.3,max_tokens:2000}}},
+      model:{default_provider:prov&&prov.id!=='later'?prov.id:'__unset__',default_model:prov&&prov.model?prov.model:'',fallback_model:'',providers:_buildProviderBlock(prov||{id:'__unset__'})},
       paths:{agents_root:'agents',vault_root:'vault',logs_root:'logs',outputs_root:'outputs',data_root:'data',src_root:'src'},
       databases:{},vault:{root:'vault',folders:{memory:'vault\\memory',outputs:'vault\\outputs'}},
       env:{required:['ANTHROPIC_API_KEY'],optional:['LOG_LEVEL'],env_file:'.env'},
@@ -2503,7 +2522,7 @@ function qaNav(dir){if(dir===1&&qaPage===0&&(!document.getElementById('qa-name')
 function qaRenderAgentList(){document.getElementById('qa-agents-list').innerHTML=qaAgents.map((a,i)=>'<div style="display:flex;align-items:center;gap:8px;background:var(--bg-card);border:1px solid var(--border);padding:10px 12px;"><span style="font-family:var(--mono);font-size:11px;color:var(--accent);min-width:60px">'+a.role.toUpperCase()+'</span><span style="flex:1">'+a.name+'</span>'+(i>0?'<button onclick="qaRemoveAgent('+i+')" style="background:none;border:none;color:var(--red);cursor:pointer;">✕</button>':'')+'</div>').join('');}
 function qaAddAgent(){const name=prompt('Agent name:');if(!name)return;const role=prompt('Role (analyst/engine/ceo/custom):','analyst')||'analyst';qaAgents.push({id:name.toLowerCase().replace(/[^a-z0-9]/g,'_'),name,role,type:'prompt',description:''});qaRenderAgentList();}
 function qaRemoveAgent(i){qaAgents.splice(i,1);qaRenderAgentList();}
-function qaGeneratePreview(){const name=document.getElementById('qa-name').value.trim(),root=document.getElementById('qa-root').value.trim(),desc=document.getElementById('qa-desc').value,model=document.getElementById('qa-model').value;const defs=qaAgents.map(a=>({id:a.id,name:a.name,display_name:a.name,role:a.role,type:'prompt',instruction_file:'agents\\'+a.id+'\\AGENT.md',model_provider:'anthropic',model_override:null,pipeline_step:a.id+'_step',enabled:true,project_tools:['filesystem','http'],apis:[],local_code:null,description:a.description,requires_approval:a.role==='ceo'}));const manifest=RockoCore.generateProjectManifest({name,rootPath:root,description:desc,agents:defs,extras:{model:{default_provider:'anthropic',default_model:model,fallback_model:'claude-haiku-4-5-20251001',providers:{anthropic:{type:'anthropic',api_base:'https://api.anthropic.com/v1',api_key_env:'ANTHROPIC_API_KEY',temperature:.3,max_tokens:2000}}}}});document.getElementById('qa-preview-text').value=JSON.stringify(manifest,null,2);}
+function qaGeneratePreview(){const name=document.getElementById('qa-name').value.trim(),root=document.getElementById('qa-root').value.trim(),desc=document.getElementById('qa-desc').value,model=document.getElementById('qa-model').value;const defs=qaAgents.map(a=>({id:a.id,name:a.name,display_name:a.name,role:a.role,type:'prompt',instruction_file:'agents\\'+a.id+'\\AGENT.md',model_provider:'__company_default__',model_override:null,pipeline_step:a.id+'_step',enabled:true,project_tools:['filesystem','http'],apis:[],local_code:null,description:a.description,requires_approval:a.role==='ceo'}));const manifest=RockoCore.generateProjectManifest({name,rootPath:root,description:desc,agents:defs,extras:{model:{default_provider:'anthropic',default_model:model,fallback_model:'claude-haiku-4-5-20251001',providers:{anthropic:{type:'anthropic',api_base:'https://api.anthropic.com/v1',api_key_env:'ANTHROPIC_API_KEY',temperature:.3,max_tokens:2000}}}}});document.getElementById('qa-preview-text').value=JSON.stringify(manifest,null,2);}
 function qaRunValidation(){let m;try{m=JSON.parse(document.getElementById('qa-preview-text').value);}catch(e){document.getElementById('qa-validation-result').innerHTML='<div class="val-item err">✕ Invalid JSON: '+e.message+'</div>';return;}const v=RockoCore.validateManifest(m);const panel=document.getElementById('qa-validation-result');if(!panel)return;panel.innerHTML='<div class="val-title">Validation — '+(m?.project?.name||'?')+'</div>'+v.errors.map(e=>'<div class="val-item err">✕ '+e+'</div>').join('')+v.warns.map(w=>'<div class="val-item warn">⚠ '+w+'</div>').join('')+(v.valid?'<div class="val-item ok">✓ Ready to import</div>':'');}
 function qaImport(){let m;try{m=JSON.parse(document.getElementById('qa-preview-text').value);}catch(e){alert('Invalid JSON: '+e.message);return;}const v=RockoCore.validateManifest(m);if(!v.valid){alert('Fix errors:\n'+v.errors.join('\n'));return;}const r=RockoCore.loadProject(m);if(r.success){RockoCore.setActiveProject(m.project.name);closeModal('quickAddModal');refreshAll();RockoCore.log('success','Quick Add: "'+m.project.name+'" imported');}}
 
@@ -3286,6 +3305,7 @@ function _createCompany(displayName, description, path, logo) {
     rootPath: path,
     description: description,
   });
+  var prov = _obProviderConfig || {provider_id:'later', model:'', status:'configure_later'};
   var co = {
     id: id,
     display_name: displayName,
@@ -3294,6 +3314,9 @@ function _createCompany(displayName, description, path, logo) {
     logo: logo || null,
     active: false,
     created_at: new Date().toISOString(),
+    default_provider: prov.provider_id || 'later',
+    default_model:    prov.model || '',
+    provider_status:  prov.status || 'configure_later',
     _manifest: proj
   };
   var list = getCompanies();
@@ -3329,11 +3352,27 @@ function onboardingCreate() {
   if (!name) { toastErr('Company name is required'); return; }
   if (!path) { toastErr('Project folder path is required'); return; }
   var co = _createCompany(name, desc, path, _currentCompanyLogo);
-  // Create first agent if provided
-  if (agentName) {
-    var proj = RockoCore.getActiveProject();
-    RockoCore.createAgent({name:agentName,role:'ceo',description:'Orchestrator',status:'active',projectName:proj});
-  }
+  // Create CEO agent with validated provider, not Anthropic default
+  var _agentName = agentName || 'CEO';
+  var _proj = RockoCore.getActiveProject();
+  var _prov = _obProviderConfig || {provider_id:'later', model:'', status:'configure_later'};
+  var _ceoId = _agentName.toLowerCase().replace(/[^a-z0-9]/g,'_') + '_agent';
+  RockoCore.createAgent({
+    id:                  _ceoId,
+    name:                _agentName,
+    display_name:        _agentName,
+    role:                'ceo',
+    type:                'prompt',
+    description:         'Company orchestrator and decision maker',
+    status:              'active',
+    model_provider:      '__company_default__',
+    model_override:      _prov.model || null,
+    using_company_default: true,
+    provider_status:     _prov.status || 'configure_later',
+    pipeline_step:       _ceoId + '_step',
+    enabled:             true,
+    projectName:         _proj,
+  });
   toastOk('Company created: ' + name);
   refreshAll();
 }
@@ -3629,6 +3668,7 @@ function submitHireAgent() {
   if (!name) { toastErr('Agent name is required'); return; }
   var proj  = RockoCore.getActiveProject();
   var id    = name.toLowerCase().replace(/[^a-z0-9]/g,'_') + '_' + Date.now().toString(36).slice(-4);
+  var _co = getActiveCompany();
   var agent = {
     id:           id,
     name:         name,
@@ -3636,15 +3676,16 @@ function submitHireAgent() {
     role:         _hireRole,
     type:         'prompt',
     description:  desc,
-    status:       'active',
     instructions: instr,
     _base_instructions: instr,
     skills:       [],
     hired_at:     new Date().toISOString(),
     pipeline_step: id + '_step',
     enabled:      true,
-    projectName:  proj,
-    model_override: null,
+    status:       'active',
+    model_provider:  '__company_default__',
+    model_override:  null,
+    using_company_default: true,
   };
   RockoCore.createAgent(agent);
   closeModal('hireModal');
@@ -4426,6 +4467,65 @@ showOnboarding = function() {
 
 
 // -- Provider selection + validation ---------------------------
+
+// ── Provider config helpers ───────────────────────────────────────────────────
+function _buildProviderBlock(prov) {
+  if (!prov || !prov.id || prov.id === 'later') return {};
+  var block = {};
+  var baseUrls = {
+    anthropic: 'https://api.anthropic.com/v1',
+    openai:    'https://api.openai.com/v1',
+    gemini:    'https://generativelanguage.googleapis.com/v1beta/openai',
+    nvidia:    'https://integrate.api.nvidia.com/v1',
+    local:     'http://localhost:11434/v1',
+    lmstudio:  'http://localhost:1234/v1',
+  };
+  block[prov.id] = {
+    type:        prov.id === 'anthropic' ? 'anthropic' : 'openai_compatible',
+    api_base:    prov.baseUrl || baseUrls[prov.id] || '',
+    api_key_env: prov.envVar || null,
+    temperature: 0.3,
+    max_tokens:  2000,
+  };
+  return block;
+}
+
+function getCompanyDefaultProvider() {
+  var co = getActiveCompany();
+  if (!co || !co.default_provider) return null;
+  return {
+    id:    co.default_provider,
+    model: co.default_model || '',
+  };
+}
+
+function getAgentModelStatus(agent) {
+  // Returns {label, status} for display on agent card
+  var co = getActiveCompany();
+  var provId = agent.model_provider;
+  if (!provId || provId === '__company_default__') {
+    provId = co ? co.default_provider : null;
+  }
+  if (!provId || provId === 'later') {
+    return {label: 'Configure Later', status: 'configure_later', dot: 'unchecked'};
+  }
+  var prov = PROVIDERS.find(function(p){ return p.id === provId; });
+  var name = prov ? prov.name : provId;
+  var model = agent.model_override || (co ? co.default_model : '') || '';
+  // Check connection status from last validation result (cached)
+  var cached = _providerStatusCache[provId];
+  if (!cached) return {label: name + (model ? ' - ' + model.split('/').pop() : ''), status: 'unchecked', dot: 'unchecked'};
+  var dot = cached === 'connected' ? 'live' : cached === 'configure_later' ? 'unchecked' : 'offline';
+  return {label: name + (model ? ' - ' + model.split('/').pop() : ''), status: cached, dot: dot};
+}
+var _providerStatusCache = {};
+
+async function checkAndCacheProviderStatus(provId, baseUrl) {
+  var r = await bridgePost('/models/providers/' + provId + '/validate', {base_url: baseUrl || ''});
+  if (r && r.status) _providerStatusCache[provId] = r.status;
+  return r;
+}
+
 var PROVIDERS = [
   {id:'anthropic', name:'Anthropic',        icon:'A', color:'#ff6b00', envVar:'ANTHROPIC_API_KEY', local:false, defaultModel:'claude-sonnet-4-20250514'},
   {id:'openai',    name:'OpenAI',           icon:'O', color:'#00c864', envVar:'OPENAI_API_KEY',    local:false, defaultModel:'gpt-4o'},
@@ -4497,20 +4597,20 @@ async function validateSelectedProvider() {
     _providerValidated = true; // allow creation with warning
     return;
   }
-  _providerValidated = r.ok || r.status === 'configure_later';
-  var icon = r.ok ? 'OK' : 'FAIL';
-  statusEl.textContent = icon + ' ' + r.message;
+  _providerValidated = r.ok || r.status === 'configure_later' || r.status === 'offline';
+  // Cache result for agent status display
+  if (r.status) _providerStatusCache[_selectedProvider.id] = r.status;
+  var icon = r.ok ? 'CONNECTED' : (r.status === 'offline' ? 'OFFLINE' : r.status === 'missing_key' ? 'KEY MISSING' : 'ERROR');
+  statusEl.textContent = icon + ' - ' + r.message;
   statusEl.style.color = r.ok ? 'var(--green)' : (r.status === 'offline' ? 'var(--yellow)' : 'var(--red)');
 }
 
 // Override onboardingCreate to include provider
 var _obCreateBase = onboardingCreate;
 onboardingCreate = function() {
-  // If no provider selected, proceed with default (anthropic + configure later)
-  if (!_selectedProvider || _selectedProvider.id === 'later') {
-    _obCreateBase();
-    return;
-  }
+  // 'later' is a valid intentional choice — all others require validation
+  if (!_selectedProvider) { _selectedProvider = {id:'later',name:'Configure Later',defaultModel:'',local:false,envVar:null}; }
+  if (_selectedProvider.id === 'later') { _obProviderConfig = {provider_id:'later',model:'',status:'configure_later'}; _obCreateBase(); return; }
   // Build provider config to store with company
   var modelInput = document.getElementById('ob-model');
   var model = modelInput ? modelInput.value.trim() : _selectedProvider.defaultModel;
@@ -4529,6 +4629,107 @@ var _obProviderConfig = null;
 // Init provider list on boot
 function initProviderSelection() {
   renderProviderList('ob-provider-list');
+}
+
+
+// ── CEO Team Building ─────────────────────────────────────────────────────────
+var _pendingTeam = null;
+
+async function runBuildTeamTask() {
+  var co = getActiveCompany();
+  if (!co) { toastErr('Create a company first'); return; }
+  var mission = prompt('Enter the company mission — CEO will build the team:\n\nExample: "Build a research company that monitors Solana DEX markets."');
+  if (!mission) return;
+  showLoading('CEO is building your team...');
+  var r = await bridgePost('/tasks', {
+    title:        'Build team for: ' + co.display_name,
+    assigned_to:  'ceo_agent',
+    type:         'agent',
+    instructions: 'Build the team you need to accomplish this mission: ' + mission + '\n\nUse the hire_agent decision with an agents[] array. For each agent include: name, role, agent_id (snake_case), description, complete AGENT.md instructions, and relevant skills from skills.sh.',
+    input:        { mission: mission, company: co.display_name },
+    priority:     'high',
+  });
+  hideLoading();
+  if (r && r.id) {
+    toastOk('CEO task queued — building team...');
+    pollForTeamResult(r.id);
+  } else {
+    toastErr('Could not queue task — is bridge running?');
+  }
+}
+
+async function pollForTeamResult(taskId) {
+  var attempts = 0;
+  var iv = setInterval(async function() {
+    attempts++;
+    if (attempts > 60) { clearInterval(iv); toastErr('CEO task timed out'); return; }
+    var r = await bridgeGet('/tasks/' + taskId);
+    if (!r) return;
+    if (r.status === 'complete') { clearInterval(iv); toastOk('CEO completed team proposal'); refreshAll(); }
+    else if (r.status === 'failed') { clearInterval(iv); toastErr('CEO task failed: ' + (r.error||'unknown')); }
+  }, 3000);
+}
+
+function showTeamReview(agents, reason) {
+  _pendingTeam = { agents: agents, reason: reason };
+  var reasonEl = document.getElementById('teamReviewReason');
+  var agentsEl = document.getElementById('teamReviewAgents');
+  if (reasonEl) reasonEl.textContent = reason || 'CEO proposes the following team:';
+  if (agentsEl) {
+    agentsEl.innerHTML = '';
+    (agents||[]).forEach(function(a) {
+      var card = document.createElement('div');
+      card.className = 'team-agent-card';
+      var skills = (a.skills||[]).map(function(s){ return '<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(71,130,255,.1);border:1px solid rgba(71,130,255,.3);color:var(--accent);">' + (s.skill_name||s) + '</span>'; }).join(' ');
+      card.innerHTML =
+        '<div class="team-agent-name">' + (a.name||a.agent_id||'Agent') + '</div>' +
+        '<div class="team-agent-role">' + (a.role||'analyst') + '</div>' +
+        '<div class="team-agent-desc">' + (a.description||'') + '</div>' +
+        '<div class="team-agent-meta">' +
+          '<span>ID: ' + (a.agent_id||'') + '</span>' +
+          '<span>File: agents/' + (a.agent_id||'') + '/AGENT.md</span>' +
+          (skills ? '<span>' + skills + '</span>' : '') +
+        '</div>';
+      agentsEl.appendChild(card);
+    });
+  }
+  openModal('teamReviewModal');
+}
+
+async function approveTeamCreation() {
+  if (!_pendingTeam) return;
+  closeModal('teamReviewModal');
+  await executeTeamCreation(_pendingTeam.agents, _pendingTeam.reason);
+  _pendingTeam = null;
+}
+
+async function executeTeamCreation(agents, reason) {
+  showLoading('Creating ' + agents.length + ' agent(s)...');
+  var r = await bridgePost('/agents/create_team', { agents: agents, reason: reason, auto_approve: true });
+  hideLoading();
+  if (r && r.ok) {
+    toastOk(r.count + ' agent(s) created');
+    refreshAll();
+  } else {
+    toastErr('Team creation failed');
+  }
+}
+
+function handleCEOHireDecision(decision) {
+  var agents = decision.agents || [];
+  if (!agents.length) return;
+  var auto = decision.auto_create || false;
+  var co   = getActiveCompany();
+  if (co && co.policy && co.policy.require_approval_for_hire) auto = false;
+  if (auto) { executeTeamCreation(agents, decision.reason||''); }
+  else       { showTeamReview(agents, decision.reason||''); }
+}
+
+function showOrchestratorResult(result) {
+  if (!result) return;
+  if (result.action === 'hire_agent' && result.agents && result.agents.length) {
+    setTimeout(function(){ handleCEOHireDecision(result); }, 400);
+  }
 }
 
 startPolling();
@@ -4659,6 +4860,24 @@ fullBoot();
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('companyModal')">Cancel</button>
       <button class="btn btn-primary" onclick="submitCompanyModal()">Create Company</button>
+    </div>
+  </div>
+</div>
+
+<!-- TEAM REVIEW MODAL -->
+<div class="modal-overlay" id="teamReviewModal">
+  <div class="modal" style="width:680px;max-height:85vh;display:flex;flex-direction:column;">
+    <div class="modal-header">
+      CEO Team Proposal
+      <button class="modal-close" onclick="closeModal('teamReviewModal')">&#x2715;</button>
+    </div>
+    <div class="modal-body" style="flex:1;overflow-y:auto;">
+      <div id="teamReviewReason" style="font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-bottom:16px;padding:10px;background:var(--bg-card);border:1px solid var(--border);line-height:1.6;"></div>
+      <div id="teamReviewAgents"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('teamReviewModal')">Reject</button>
+      <button class="btn btn-primary" onclick="approveTeamCreation()">Approve &amp; Create Team</button>
     </div>
   </div>
 </div>

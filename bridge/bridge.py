@@ -32,6 +32,7 @@ else:
 
 BRIDGE_START    = datetime.now().isoformat()
 BRIDGE_BUILD_ID = "bridge_package_import_fix_2026_04_24"
+_port = 8787  # updated in cli_main
 
 # -- Core state ----------------------------------------------------------------
 PROJECT:        Dict = {}
@@ -1180,19 +1181,21 @@ async def create_company(request: Request):
     auth_hdr = request.headers.get("authorization", "")
     session_token = auth_hdr[7:] if auth_hdr.startswith("Bearer ") else None
     session_user = _get_user_from_session(session_token) if session_token else None
+    existing = companies.get(cid, {})
     companies[cid] = {
         "id":           cid,
-        "display_name": body.get("display_name", ""),
-        "description":  body.get("description", ""),
-        "logo_path":    body.get("logo_path", ""),
-        "project_path": body.get("project_path", ""),
-        "active":       body.get("active", False),
-        "user_id":      session_user["id"] if session_user else body.get("user_id", ""),
-        "created_at":   datetime.now().isoformat(),
+        "display_name": body.get("display_name", existing.get("display_name", "")),
+        "description":  body.get("description",  existing.get("description", "")),
+        "logo_path":    body.get("logo_path",     existing.get("logo_path", "")),
+        "project_path": body.get("project_path",  existing.get("project_path", "")),
+        "active":       body.get("active",        existing.get("active", False)),
+        "user_id":      session_user["id"] if session_user else body.get("user_id", existing.get("user_id", "")),
+        "created_at":   existing.get("created_at", datetime.now().isoformat()),
         "updated_at":   datetime.now().isoformat(),
     }
     _save_companies(companies)
-    _log("info", f"Company created: {companies[cid]['display_name']}")
+    action = "updated" if existing else "created"
+    _log("info", f"Company {action}: {companies[cid]['display_name']}")
     return companies[cid]
 
 @app.get("/companies/{company_id}")
@@ -1389,6 +1392,191 @@ async def apply_skill_legacy(skill_id: str, agent_id: str, request: Request):
 
 
 # -- Entry ---------------------------------------------------------------------
+# ── CEO Agent creation — write files, register, assign skills ─────────────────
+def _write_agent_files(agent_def: dict, project_root: str) -> str:
+    if not project_root: return ""
+    agent_id = (agent_def.get("agent_id") or agent_def.get("id") or
+                agent_def.get("name","agent").lower().replace(" ","_").replace("-","_"))
+    agent_dir  = Path(project_root) / "agents" / agent_id
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    agent_file = agent_dir / "AGENT.md"
+    instructions = agent_def.get("instructions", "")
+    if not instructions:
+        instructions = f"# {agent_def.get('name', agent_id)}\n\nRole: {agent_def.get('role','analyst')}\nDescription: {agent_def.get('description','')}\n\nYou are a specialist agent. Follow company policy and CEO direction.\n"
+    with open(agent_file, "w", encoding="utf-8") as f:
+        f.write(instructions)
+    return str(agent_file)
+
+def _register_agent_in_project(agent_def: dict, file_path: str) -> dict:
+    global PROJECT
+    if not PROJECT: return agent_def
+    agent_id = (agent_def.get("agent_id") or agent_def.get("id") or
+                agent_def.get("name","agent").lower().replace(" ","_"))
+    agents = [a for a in PROJECT.get("agents", []) if a.get("id") != agent_id]
+    new_agent = {
+        "id":             agent_id, "name": agent_def.get("name", agent_id),
+        "display_name":   agent_def.get("name", agent_id),
+        "role":           agent_def.get("role", "analyst"), "type": "prompt",
+        "description":    agent_def.get("description", ""),
+        "instruction_file": f"agents\\{agent_id}\\AGENT.md",
+        "model_provider": agent_def.get("model_provider","__company_default__"),
+        "model_override": agent_def.get("model_override"), "pipeline_step": agent_id+"_step",
+        "enabled": True, "status": "active", "skills": agent_def.get("skills",[]),
+        "using_company_default": True, "created_by": "ceo",
+        "created_at": datetime.now().isoformat(),
+    }
+    agents.append(new_agent)
+    PROJECT["agents"] = agents
+    if PROJECT_ROOT:
+        proj_file = Path(PROJECT_ROOT) / "project.json"
+        try:
+            with open(proj_file, "w", encoding="utf-8") as f:
+                json.dump(PROJECT, f, indent=2)
+        except Exception as e:
+            _log("warn", f"Could not update project.json: {e}")
+    return new_agent
+
+def _assign_skills_to_agent(agent_id: str, skills: list) -> list:
+    if not skills: return []
+    assigned = []
+    for skill_ref in skills:
+        repo       = skill_ref.get("repo","")
+        skill_name = skill_ref.get("skill_name","")
+        if not repo or not skill_name: continue
+        try:
+            owner, reponame = repo.split("/",1) if "/" in repo else (repo, repo)
+            content = None
+            for path in [f"{skill_name}/SKILL.md", f"skills/{skill_name}/SKILL.md"]:
+                content = _fetch_github_file(owner, reponame, path)
+                if content: break
+            if content:
+                parsed = _parse_skill_md(content, owner, reponame, skill_name)
+                cache_path = ""
+                if PROJECT_ROOT:
+                    skills_dir = Path(PROJECT_ROOT) / ".rocko_skills"
+                    skills_dir.mkdir(parents=True, exist_ok=True)
+                    cf = skills_dir / f"{owner}__{reponame}__{skill_name}.md"
+                    with open(cf, "w") as f: f.write(content)
+                    cache_path = str(cf)
+                assigned.append({
+                    "id": parsed["id"], "name": parsed["name"], "repo": repo,
+                    "skill_name": skill_name, "source": "skills.sh",
+                    "cached_path": cache_path, "agent_id": agent_id,
+                    "assigned_at": datetime.now().isoformat(),
+                    "instructions": parsed.get("instructions",""),
+                })
+                _log("info", f"Skill assigned: {repo}/{skill_name} -> {agent_id}")
+        except Exception as e:
+            _log("warn", f"Skill error {repo}/{skill_name}: {e}")
+    return assigned
+
+def _build_effective_instructions(agent_id: str) -> str:
+    if not PROJECT: return ""
+    agent = next((a for a in PROJECT.get("agents",[]) if a.get("id")==agent_id), None)
+    if not agent: return ""
+    base = ""
+    instr_file = agent.get("instruction_file","")
+    if instr_file and PROJECT_ROOT:
+        fp = Path(PROJECT_ROOT) / instr_file.replace("\\\\","/").replace("\\","/").replace("\\","/")
+        if fp.exists():
+            with open(fp, encoding="utf-8") as f: base = f.read()
+    for skill in agent.get("skills",[]):
+        cached = skill.get("cached_path","")
+        if cached and Path(cached).exists():
+            with open(cached, encoding="utf-8") as f: base += f"\n\n{f.read()}"
+        elif skill.get("instructions"):
+            base += f"\n\n{skill.get('instructions')}"
+    return base
+
+@app.post("/agents/create")
+async def create_agent_api(request: Request):
+    body = await request.json()
+    file_path  = _write_agent_files(body, PROJECT_ROOT)
+    registered = _register_agent_in_project(body, file_path)
+    skills     = _assign_skills_to_agent(registered["id"], body.get("skills",[]))
+    if skills:
+        for a in (PROJECT.get("agents",[]) if PROJECT else []):
+            if a.get("id") == registered["id"]: a["skills"] = skills; break
+    return {"ok": True, "agent": registered, "file_path": file_path, "skills": skills}
+
+@app.post("/agents/create_team")
+async def create_team_api(request: Request):
+    body    = await request.json()
+    agents  = body.get("agents", [])
+    reason  = body.get("reason", "")
+    results = []
+    for agent_def in agents:
+        file_path  = _write_agent_files(agent_def, PROJECT_ROOT)
+        registered = _register_agent_in_project(agent_def, file_path)
+        skills     = _assign_skills_to_agent(registered["id"], agent_def.get("skills",[]))
+        if skills:
+            for a in (PROJECT.get("agents",[]) if PROJECT else []):
+                if a.get("id") == registered["id"]: a["skills"] = skills; break
+        results.append({"agent": registered, "file_path": file_path, "skills": skills})
+        _log("info", f"Team agent created: {registered['name']}")
+    return {"ok": True, "reason": reason, "count": len(results), "agents": results}
+
+@app.get("/agents/{agent_id}/instructions")
+def get_agent_effective_instructions(agent_id: str):
+    effective = _build_effective_instructions(agent_id)
+    return {"agent_id": agent_id, "instructions": effective, "length": len(effective)}
+
+@app.post("/agents/{agent_id}/skills/assign")
+async def assign_agent_skills(agent_id: str, request: Request):
+    body   = await request.json()
+    skills = body.get("skills", [])
+    result = _assign_skills_to_agent(agent_id, skills)
+    for a in (PROJECT.get("agents",[]) if PROJECT else []):
+        if a.get("id") == agent_id:
+            existing     = a.get("skills", [])
+            existing_ids = {s.get("id") for s in existing}
+            for s in result:
+                if s.get("id") not in existing_ids: existing.append(s)
+            a["skills"] = existing; break
+    return {"ok": True, "agent_id": agent_id, "skills_assigned": result}
+
+# ── Native Execution Engine endpoints ─────────────────────────────────────────
+@app.get("/engine/executors")
+def list_engine_executors():
+    if not _exec_engine: raise HTTPException(503, "Execution engine not ready")
+    return {"executors": _exec_engine.get_executors(), "engine": "native"}
+
+@app.post("/engine/run/{executor_id}")
+async def engine_run(executor_id: str, request: Request):
+    if not _exec_engine: raise HTTPException(503, "Execution engine not ready")
+    body = {}
+    try: body = await request.json()
+    except: pass
+    ctx    = body.get("context", body.get("input", {}))
+    dry    = body.get("dry_run", False)
+    bypass = body.get("bypass_approval", False)
+    if _exec_engine.requires_approval(executor_id) and not bypass:
+        return {"ok": False, "requires_approval": True,
+                "risk_level": _exec_engine.get_risk_level(executor_id)}
+    return _exec_engine.run(executor_id, ctx, dry_run=dry, bypass_approval=bypass)
+
+@app.post("/engine/run/{executor_id}/approve")
+async def engine_run_approved(executor_id: str, request: Request):
+    if not _exec_engine: raise HTTPException(503, "Execution engine not ready")
+    body = {}
+    try: body = await request.json()
+    except: pass
+    return _exec_engine.run(executor_id, body.get("context",{}), bypass_approval=True)
+
+@app.get("/models/providers/list")
+def list_all_providers():
+    import bridge.model_manager as mm
+    return {"providers": mm.BUILTIN_PROVIDERS}
+
+@app.post("/models/providers/{provider_id}/validate")
+async def validate_provider_endpoint(provider_id: str, request: Request):
+    body = {}
+    try: body = await request.json()
+    except: pass
+    import bridge.model_manager as mm
+    return mm.validate_provider(provider_id, PROJECT_ROOT, body.get("base_url",""))
+
+
 def cli_main(argv=None):
     """Callable entry point - used by PyInstaller exe and rockoagents.cli"""
     import sys as _s
@@ -1516,6 +1704,8 @@ def cli_main(argv=None):
                 _t.sleep(60)
     _th.Thread(target=_heartbeat, daemon=True).start()
 
+    global _port
+    _port = args.port
     uvicorn.run(app, host=args.host, port=args.port,
         log_level="info", access_log=True,
         log_config={
