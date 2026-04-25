@@ -58,6 +58,7 @@ _task_worker  = None
 _scheduler    = None
 _orchestrator = None
 _runtime_mgr  = None
+_exec_engine  = None
 _runtime_mgr  = None
 
 # -- App -----------------------------------------------------------------------
@@ -337,6 +338,10 @@ def _init_subsystems():
     from bridge.runtime_manager import RuntimeManager
     _runtime_mgr = RuntimeManager()
     _runtime_mgr.init(PROJECT, lambda msg: _log("info", msg))
+
+    from bridge.execution_engine import NativeExecutionEngine
+    _exec_engine = NativeExecutionEngine()
+    _exec_engine.init(PROJECT, lambda msg: _log("info", msg))
 
     # Re-init task worker with runtime support
     _task_worker._runtime_fn = lambda rid, ctx, aid: _runtime_mgr.execute(rid, ctx, aid)

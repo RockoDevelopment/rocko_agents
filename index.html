@@ -382,6 +382,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
 .company-rail{width:60px;min-width:60px;background:var(--bg-void);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:8px;overflow-y:auto;flex-shrink:0;z-index:50;}
 .company-rail::-webkit-scrollbar{display:none;}
 .company-slot{width:40px;height:40px;border-radius:8px;background:var(--bg-panel);border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:var(--cond);font-size:15px;font-weight:700;color:var(--text-dim);transition:all .2s;position:relative;overflow:hidden;flex-shrink:0;}
+.company-slot img{width:100%;height:100%;object-fit:cover;display:block;position:absolute;top:0;left:0;}
 .company-slot:hover{border-color:var(--border-bright);color:var(--text-primary);}
 .company-slot.active{border-color:var(--accent);color:var(--accent);}
 .company-slot img{width:100%;height:100%;object-fit:cover;}
@@ -512,6 +513,26 @@ body { display:flex; flex-direction:row; overflow:hidden; }
 .ob-company-name{font-family:var(--cond);font-size:15px;font-weight:700;letter-spacing:1px;color:#fff;word-break:break-word;}
 .ob-company-desc{font-family:var(--mono);font-size:10px;color:rgba(255,255,255,.45);line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
 
+
+/* -- Provider Selection -------------------------------- */
+.provider-option{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--border);cursor:pointer;margin-bottom:6px;transition:all .15s;}
+.provider-option:hover{border-color:var(--accent);}
+.provider-option.selected{border-color:var(--accent);background:rgba(71,130,255,.06);}
+.provider-option input[type=radio]{accent-color:var(--accent);}
+.provider-icon-sm{width:28px;height:28px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;font-family:var(--cond);flex-shrink:0;}
+.provider-status-pill{font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:2px;border:1px solid;}
+.status-connected{color:var(--green);border-color:rgba(0,255,136,.3);background:rgba(0,255,136,.06);}
+.status-missing_key{color:var(--red);border-color:rgba(255,71,87,.3);background:rgba(255,71,87,.06);}
+.status-offline{color:var(--yellow);border-color:rgba(255,209,102,.3);background:rgba(255,209,102,.06);}
+.status-configure_later{color:var(--text-dim);border-color:var(--border);}
+.status-checking{color:var(--accent);border-color:rgba(71,130,255,.3);}
+/* -- Agent status on cards ----------------------------- */
+.agent-model-badge{font-family:var(--mono);font-size:9px;padding:2px 6px;border:1px solid var(--border);display:inline-flex;align-items:center;gap:4px;margin-top:4px;}
+.agent-model-badge .badge-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.badge-dot.live{background:var(--green);}
+.badge-dot.offline{background:var(--red);}
+.badge-dot.unchecked{background:var(--text-dim);}
+
 </style>
 <style>
 /* v4 additions */
@@ -621,6 +642,18 @@ body { display:flex; flex-direction:row; overflow:hidden; }
     <div class="field-group">
       <div class="field-label">First Agent Name (optional)</div>
       <input class="field-input" id="ob-agent" placeholder="CEO">
+    </div>
+    <div class="field-group">
+      <div class="field-label">Default Model Provider</div>
+      <div id="ob-provider-list" style="margin-top:4px;"></div>
+      <div id="ob-custom-url" style="display:none;margin-top:8px;">
+        <input class="field-input" id="ob-custom-base" placeholder="http://localhost:8080/v1">
+      </div>
+      <div id="ob-model-row" style="margin-top:8px;display:none;">
+        <div class="field-label">Model</div>
+        <input class="field-input" id="ob-model" placeholder="e.g. claude-sonnet-4-20250514">
+      </div>
+      <div id="ob-provider-status" style="margin-top:8px;font-family:var(--mono);font-size:11px;display:none;padding:8px 12px;border:1px solid var(--border);"></div>
     </div>
     <div style="display:flex;gap:12px;margin-top:32px;">
       <button class="btn btn-primary" style="flex:1;padding:14px;font-size:13px;letter-spacing:1px;" onclick="onboardingCreate()">CREATE COMPANY</button>
@@ -3204,7 +3237,7 @@ function renderCompanyRail() {
     slot.title     = co.display_name || co.id;
     slot.addEventListener('click', function() { setActiveCompany(co.id); });
     if (co.logo) {
-      slot.innerHTML = '<img src="' + co.logo + '" alt=""><span class="company-slot-tip">' + (co.display_name||co.id) + '</span>';
+      slot.innerHTML = '<img src="' + co.logo + '" alt="" style="width:100%;height:100%;object-fit:cover;display:block;"><span class="company-slot-tip">' + (co.display_name||co.id) + '</span>';
     } else {
       var init = (co.display_name || co.id).charAt(0).toUpperCase();
       slot.innerHTML = init + '<span class="company-slot-tip">' + (co.display_name||co.id) + '</span>';
@@ -3267,6 +3300,15 @@ function _createCompany(displayName, description, path, logo) {
   if (!list.length) co.active = true;
   list.push(co);
   saveCompanies(list);
+  // Also write new company directly to bridge so it persists to account
+  bridgePost('/companies', {
+    id:           co.id,
+    display_name: co.display_name,
+    description:  co.description,
+    project_path: co.project_path,
+    logo_path:    '',
+    active:       true,
+  });
   RockoCore.loadProject(proj);
   RockoCore.setActiveProject(proj.project.name);
   list.forEach(function(c){ c.active = c.id === id; });
@@ -3667,66 +3709,57 @@ openAgent = function(id) {
 
 
 // Company + Skills boot sequence — smart detection for returning users
-function bootCompanyLayer() {
+async function bootCompanyLayer() {
   loadSkillsLibrary();
 
-  var companies  = getCompanies();
-  var activeProj = RockoCore.getActiveProject();
-  var manifest   = activeProj ? RockoCore.getProject(activeProj) : null;
-
-  // ── Case 1: Companies already exist in localStorage ──────────────────────
-  if (companies.length > 0) {
-    var active = getActiveCompany();
-    if (!active) {
-      // No active flag set — activate the first one
-      companies[0].active = true;
-      saveCompanies(companies);
-      active = companies[0];
+  // ── Primary: load companies from bridge (source of truth, tied to account) ─
+  var bridgeCompanies = null;
+  try {
+    var resp = await bridgeGet('/companies');
+    if (resp && resp.companies && resp.companies.length > 0) {
+      bridgeCompanies = resp.companies;
     }
+  } catch(e) { /* bridge offline — fall through to localStorage */ }
+
+  if (bridgeCompanies) {
+    // Merge logo data from localStorage (logos stored browser-side only)
+    var localList = getCompanies();
+    bridgeCompanies = bridgeCompanies.map(function(co) {
+      var local = localList.find(function(l){ return l.id === co.id; });
+      if (local && local.logo) co.logo = local.logo;
+      return co;
+    });
+    // Preserve active flag: honour bridge order, keep last active from local
+    var activeId = null;
+    var localActive = localList.find(function(c){ return c.active; });
+    if (localActive) activeId = localActive.id;
+    if (!activeId) activeId = bridgeCompanies[0].id;
+    bridgeCompanies.forEach(function(c){ c.active = c.id === activeId; });
+    // Write back to localStorage as cache (without _manifest to avoid quota)
+    var lean = bridgeCompanies.map(function(c){
+      var copy = Object.assign({}, c); delete copy._manifest; return copy;
+    });
+    try { localStorage.setItem(COMPANIES_KEY, JSON.stringify(lean)); } catch(e) {}
+    var active = bridgeCompanies.find(function(c){ return c.active; }) || bridgeCompanies[0];
     renderCompanyRail();
     updateTopbarCompany(active);
     hideOnboarding();
     return;
   }
 
-  // ── Case 2: No companies but a project is already loaded (returning user) ─
-  // This covers: bundled ThePaperTeam, previously imported project,
-  // or any state where RockoCore has a project from localStorage
-  if (activeProj && manifest) {
-    autoMigrateExistingProject();
-    var migrated = getActiveCompany();
-    if (migrated) {
-      renderCompanyRail();
-      updateTopbarCompany(migrated);
-      hideOnboarding();
-      return;
-    }
-  }
-
-  // ── Case 3: RockoCore has agents saved (user created agents before company layer existed) ─
-  var allAgents = RockoCore.getAgents ? RockoCore.getAgents(activeProj) : [];
-  if (allAgents && allAgents.length > 0) {
-    // There's real work here — auto-create a company from what exists
-    var projName = activeProj || 'My Workspace';
-    var co = {
-      id: projName.toLowerCase().replace(/[^a-z0-9]/g,'_') + '_auto',
-      display_name: projName,
-      description: '',
-      project_path: (manifest && manifest.project) ? (manifest.project.root_path || '') : '',
-      logo: null,
-      active: true,
-      created_at: new Date().toISOString(),
-      _manifest: manifest
-    };
-    var list = [co];
-    saveCompanies(list);
+  // ── Fallback: bridge offline or no companies on bridge yet ─────────────────
+  // Use localStorage cache so UI still works when bridge is temporarily down
+  var companies = getCompanies();
+  if (companies.length > 0) {
+    var active = getActiveCompany();
+    if (!active) { companies[0].active = true; saveCompanies(companies); active = companies[0]; }
     renderCompanyRail();
-    updateTopbarCompany(co);
+    updateTopbarCompany(active);
     hideOnboarding();
     return;
   }
 
-  // ── Case 4: Truly fresh install — show onboarding ─────────────────────────
+  // ── No companies anywhere — show onboarding ────────────────────────────────
   showOnboarding();
 }
 
@@ -4294,7 +4327,7 @@ async function fullBoot() {
   });
   // 2. Auth
   var authed = await bootAuth();
-  if (authed) { bootCompanyLayer(); }
+  if (authed) { await bootCompanyLayer(); }
   // 3. Start polling + init UI
   
 // ── Provider test ─────────────────────────────────────────────
@@ -4390,6 +4423,113 @@ showOnboarding = function() {
     document.getElementById('onboardingCreatePanel').style.display = '';
   }
 };
+
+
+// -- Provider selection + validation ---------------------------
+var PROVIDERS = [
+  {id:'anthropic', name:'Anthropic',        icon:'A', color:'#ff6b00', envVar:'ANTHROPIC_API_KEY', local:false, defaultModel:'claude-sonnet-4-20250514'},
+  {id:'openai',    name:'OpenAI',           icon:'O', color:'#00c864', envVar:'OPENAI_API_KEY',    local:false, defaultModel:'gpt-4o'},
+  {id:'gemini',    name:'Google Gemini',    icon:'G', color:'#4285f4', envVar:'GEMINI_API_KEY',    local:false, defaultModel:'gemini-2.0-flash'},
+  {id:'nvidia',    name:'NVIDIA',           icon:'N', color:'#76b900', envVar:'NVIDIA_API_KEY',    local:false, defaultModel:'nvidia/llama-3.1-nemotron-ultra-253b-v1'},
+  {id:'local',     name:'Ollama (Local)',   icon:'L', color:'#4782ff', envVar:null,                local:true,  defaultModel:'llama3.2', baseUrl:'http://localhost:11434/v1'},
+  {id:'lmstudio',  name:'LM Studio (Local)',icon:'S', color:'#8b5cf6', envVar:null,                local:true,  defaultModel:'local-model', baseUrl:'http://localhost:1234/v1'},
+  {id:'custom',    name:'Custom Endpoint',  icon:'C', color:'#6b7280', envVar:null,                local:false, defaultModel:''},
+  {id:'later',     name:'Configure Later',  icon:'?', color:'#4b5563', envVar:null,                local:false, defaultModel:''},
+];
+var _selectedProvider = null;
+var _providerValidated = false;
+
+function renderProviderList(containerId) {
+  var el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = '';
+  PROVIDERS.forEach(function(prov) {
+    var opt = document.createElement('div');
+    opt.className = 'provider-option';
+    opt.innerHTML =
+      '<input type="radio" name="ob-provider" value="' + prov.id + '">' +
+      '<div class="provider-icon-sm" style="background:' + prov.color + '22;color:' + prov.color + '">' + prov.icon + '</div>' +
+      '<div style="flex:1;">' +
+        '<div style="font-weight:600;font-size:13px;">' + prov.name + '</div>' +
+        (prov.envVar ? '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">' + prov.envVar + '</div>' : 
+         prov.local  ? '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">No key needed - local server</div>' : '') +
+      '</div>';
+    opt.addEventListener('click', function() {
+      document.querySelectorAll('.provider-option').forEach(function(o){ o.classList.remove('selected'); });
+      opt.classList.add('selected');
+      opt.querySelector('input[type=radio]').checked = true;
+      _selectedProvider = prov;
+      _providerValidated = false;
+      // Show/hide model field and custom URL
+      var customRow = document.getElementById('ob-custom-url');
+      var modelRow  = document.getElementById('ob-model-row');
+      var modelInput = document.getElementById('ob-model');
+      if (customRow) customRow.style.display = prov.id === 'custom' ? '' : 'none';
+      if (modelRow)  modelRow.style.display  = prov.id === 'later'  ? 'none' : '';
+      if (modelInput && prov.defaultModel) modelInput.value = prov.defaultModel;
+      // Auto-validate after short delay
+      var statusEl = document.getElementById('ob-provider-status');
+      if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Checking...'; statusEl.style.color = 'var(--accent)'; }
+      if (prov.id !== 'later') setTimeout(function(){ validateSelectedProvider(); }, 300);
+      else { if (statusEl) { statusEl.textContent = 'Will configure after company creation.'; statusEl.style.color = 'var(--text-dim)'; } _providerValidated = true; }
+    });
+    el.appendChild(opt);
+  });
+}
+
+async function validateSelectedProvider() {
+  if (!_selectedProvider) return;
+  var statusEl = document.getElementById('ob-provider-status');
+  if (!statusEl) return;
+  statusEl.style.display = '';
+  statusEl.textContent = 'Checking ' + _selectedProvider.name + '...';
+  statusEl.style.color = 'var(--accent)';
+  _providerValidated = false;
+
+  var baseUrl = _selectedProvider.id === 'custom'
+    ? (document.getElementById('ob-custom-base') || {}).value || ''
+    : (_selectedProvider.baseUrl || '');
+
+  var r = await bridgePost('/models/providers/' + _selectedProvider.id + '/validate', {base_url: baseUrl});
+  if (!r) {
+    statusEl.textContent = 'Bridge offline - cannot validate. Create company anyway or start bridge first.';
+    statusEl.style.color = 'var(--yellow)';
+    _providerValidated = true; // allow creation with warning
+    return;
+  }
+  _providerValidated = r.ok || r.status === 'configure_later';
+  var icon = r.ok ? 'OK' : 'FAIL';
+  statusEl.textContent = icon + ' ' + r.message;
+  statusEl.style.color = r.ok ? 'var(--green)' : (r.status === 'offline' ? 'var(--yellow)' : 'var(--red)');
+}
+
+// Override onboardingCreate to include provider
+var _obCreateBase = onboardingCreate;
+onboardingCreate = function() {
+  // If no provider selected, proceed with default (anthropic + configure later)
+  if (!_selectedProvider || _selectedProvider.id === 'later') {
+    _obCreateBase();
+    return;
+  }
+  // Build provider config to store with company
+  var modelInput = document.getElementById('ob-model');
+  var model = modelInput ? modelInput.value.trim() : _selectedProvider.defaultModel;
+  var customBase = (document.getElementById('ob-custom-base') || {}).value || '';
+  _obProviderConfig = {
+    provider_id: _selectedProvider.id,
+    model:       model || _selectedProvider.defaultModel,
+    base_url:    customBase || _selectedProvider.baseUrl || '',
+    env_var:     _selectedProvider.envVar,
+    status:      _providerValidated ? 'validated' : 'pending',
+  };
+  _obCreateBase();
+};
+var _obProviderConfig = null;
+
+// Init provider list on boot
+function initProviderSelection() {
+  renderProviderList('ob-provider-list');
+}
 
 startPolling();
   init();

@@ -1,15 +1,19 @@
 # ── Your personal projects (never commit these) ───────────────────────────────
-# Each user's projects live only on their own machine.
-# Use the UI to create companies/projects — they stay local.
 projects/*/
 !projects/.gitkeep
 !templates/
+
+# ── Compiled executables (distributed via GitHub Releases, not the repo) ──────
+rocko.exe
+rocko
+*.exe
 
 # ── Runtime data (written by the bridge, machine-specific) ───────────────────
 data/
 dist/
 build/
 *.spec.bak
+*.spec.tmp
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
@@ -34,11 +38,6 @@ secrets.json
 
 # ── Skills cache (fetched from GitHub, machine-specific) ─────────────────────
 .rocko_skills/
-
-# ── PyInstaller build artifacts ───────────────────────────────────────────────
-dist/
-build/
-*.spec.tmp
 
 # ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store

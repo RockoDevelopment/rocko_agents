@@ -223,11 +223,44 @@ BUILTIN_PROVIDERS = {
     },
     "local": {
         "type": "openai_compatible",
-        "display_name": "Local (Ollama)",
+        "display_name": "Ollama (Local)",
         "api_base": "http://localhost:11434/v1",
         "api_key_env": None,
         "key_required": False,
         "docs_url": "https://ollama.ai/",
+        "local": True,
+    },
+    "lmstudio": {
+        "type": "openai_compatible",
+        "display_name": "LM Studio (Local)",
+        "api_base": "http://localhost:1234/v1",
+        "api_key_env": None,
+        "key_required": False,
+        "docs_url": "https://lmstudio.ai/",
+        "local": True,
+    },
+    "gemini": {
+        "type": "openai_compatible",
+        "display_name": "Google Gemini",
+        "api_base": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "api_key_env": "GEMINI_API_KEY",
+        "key_required": True,
+        "docs_url": "https://aistudio.google.com/",
+        "available_models": [
+            "gemini-2.0-flash",
+            "gemini-2.5-pro-preview-05-06",
+            "gemini-1.5-pro",
+            "gemini-1.5-flash",
+        ],
+    },
+    "custom": {
+        "type": "openai_compatible",
+        "display_name": "Custom Endpoint",
+        "api_base": "",
+        "api_key_env": "CUSTOM_API_KEY",
+        "key_required": False,
+        "docs_url": "",
+        "custom": True,
     },
 }
 
@@ -274,3 +307,77 @@ def get_provider_status(project_root: str = "") -> Dict:
             status[prov_key]["available_models"] = prov_cfg["available_models"]
 
     return status
+
+
+def validate_provider(provider_id: str, project_root: str = "",
+                       base_url_override: str = "") -> Dict:
+    """
+    Validate a provider can actually work.
+    Returns {ok, status, message, env_var, key_present, reachable}
+    """
+    env      = load_env(project_root) if project_root else _env_vars
+    builtin  = BUILTIN_PROVIDERS.get(provider_id, {})
+    providers = _project.get("model", {}).get("providers", {})
+    proj_cfg  = providers.get(provider_id, {})
+
+    cfg = {**builtin, **proj_cfg}
+    if base_url_override:
+        cfg["api_base"] = base_url_override
+
+    is_local    = cfg.get("local") or not cfg.get("key_required")
+    env_var     = cfg.get("api_key_env")
+    key_present = bool(env.get(env_var)) if env_var else True
+    api_base    = cfg.get("api_base", "")
+
+    result = {
+        "ok":          False,
+        "provider_id": provider_id,
+        "display_name": cfg.get("display_name", provider_id),
+        "env_var":     env_var,
+        "key_present": key_present,
+        "reachable":   False,
+        "status":      "unknown",
+        "message":     "",
+    }
+
+    if not is_local and not key_present:
+        result["status"]  = "missing_key"
+        result["message"] = f"API key missing. Add {env_var} to your .env file."
+        return result
+
+    # Try to reach the endpoint
+    if api_base:
+        import urllib.request as _ur
+        headers = {}
+        if env_var and env.get(env_var):
+            headers["Authorization"] = f"Bearer {env.get(env_var)}"
+        try:
+            test_url = api_base.rstrip("/") + "/models"
+            req = _ur.Request(test_url, headers=headers)
+            with _ur.urlopen(req, timeout=6) as r:
+                r.read()
+            result["reachable"] = True
+            result["ok"]        = True
+            result["status"]    = "connected"
+            result["message"]   = "Provider connected and responding."
+        except Exception as e:
+            err_str = str(e)
+            if "401" in err_str or "403" in err_str:
+                result["status"]  = "auth_failed"
+                result["message"] = "API key rejected. Check your key is correct."
+            elif is_local or "refused" in err_str.lower() or "connection" in err_str.lower():
+                result["status"]  = "offline"
+                result["message"] = f"Local server not running at {api_base}. Start Ollama or LM Studio first."
+            else:
+                result["status"]  = "unreachable"
+                result["message"] = f"Could not reach {api_base}: {err_str[:120]}"
+    else:
+        if provider_id == "custom":
+            result["status"]  = "needs_config"
+            result["message"] = "Enter your custom endpoint URL."
+        else:
+            result["status"]  = "configure_later"
+            result["message"] = "Provider will be configured later."
+            result["ok"]      = True
+
+    return result
