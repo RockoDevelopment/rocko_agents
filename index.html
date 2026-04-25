@@ -222,10 +222,11 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .settings-body::-webkit-scrollbar{width:3px;}
 .settings-body::-webkit-scrollbar-thumb{background:var(--border);}
 .section-label{font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-top:8px;}
+.settings-section-title{font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:8px;border-bottom:1px solid var(--border-bright);padding-bottom:6px;}
 .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-.info-card{background:var(--bg-card);border:1px solid var(--border);padding:12px;}
-.info-card-label{font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px;}
-.info-card-val{font-family:var(--mono);font-size:12px;color:var(--text-secondary);word-break:break-all;}
+.info-card{background:var(--bg-card);border:1px solid var(--border-bright);padding:12px;border-radius:4px;}
+.info-card-label{font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;}
+.info-card-val{font-family:var(--mono);font-size:12px;color:var(--text-primary);word-break:break-all;}
 .validation-panel{background:var(--bg-card);border:1px solid var(--border);padding:14px;}
 .val-title{font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-bottom:10px;}
 .val-item{font-family:var(--mono);font-size:11px;padding:3px 0;display:flex;gap:8px;align-items:flex-start;line-height:1.5;}
@@ -978,36 +979,60 @@ body { display:flex; flex-direction:row; overflow:hidden; }
     <!-- SETTINGS -->
     <div class="view" id="view-settings">
       <div class="dash-header">
-        <div class="dash-title">Project Settings</div>
-        <div style="margin-left:auto;"><button class="btn btn-ghost" onclick="openLogModal()">Logs</button></div>
+        <div class="dash-title">Settings</div>
+        <div style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-ghost" onclick="openLogModal()">Logs</button>
+        </div>
       </div>
       <div class="settings-body">
-        <div class="section-label">Active Project</div>
+
+        <!-- Active Project -->
+        <div class="settings-section-title">Active Project</div>
         <div class="info-grid" id="settingsProjectInfo"></div>
-        <div class="section-label">Model Configuration</div>
+
+        <!-- Model Configuration -->
+        <div class="settings-section-title" style="margin-top:20px;">Model Configuration</div>
         <div class="info-grid" id="settingsModelInfo"></div>
-        <div class="section-label">Environment Variables</div>
-        <div id="settingsEnvInfo"></div>
-        <div class="section-label">APIs Configured</div>
-        <div id="settingsApiInfo"></div>
-        <div class="section-label">Agent Sync</div>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-          <button class="btn btn-warn" onclick="syncAgentsNow()">⟳ Sync Agents from project.json</button>
-          <span style="font-family:var(--mono);font-size:11px;color:var(--text-dim);">Reads manifest + loads AGENT.md via bridge if online</span>
+
+        <!-- CEO Agent -->
+        <div class="settings-section-title" style="margin-top:20px;">CEO Agent</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-primary" id="createCeoBtn" style="display:none;" onclick="createMissingCEO()">★ Create CEO Agent</button>
+          <span style="font-size:11px;color:var(--text-secondary);font-family:var(--mono);" id="ceoStatusLabel"></span>
         </div>
-        <div class="sync-result" id="syncResult"></div>
-        <div class="section-label">Bridge Status</div>
-        <div id="settingsBridgeInfo" style="background:var(--bg-card);border:1px solid var(--border);padding:14px;font-family:var(--mono);font-size:11px;color:var(--text-secondary);line-height:1.8;">Checking...</div>
-        <div class="section-label">Validation</div>
-        <div class="validation-panel" id="settingsValidation"><div class="val-title">Click Validate</div></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
-          <button class="btn btn-primary" onclick="runValidation()">Validate Project</button>
+
+        <!-- Environment Variables -->
+        <div class="settings-section-title" style="margin-top:20px;">Environment Variables</div>
+        <div id="settingsEnvInfo"></div>
+
+        <!-- APIs -->
+        <div class="settings-section-title" style="margin-top:20px;">APIs Configured</div>
+        <div id="settingsApiInfo"></div>
+
+        <!-- Agent Sync -->
+        <div class="settings-section-title" style="margin-top:20px;">Agent Sync</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+          <button class="btn btn-warn" onclick="syncAgentsNow()">⟳ Sync Agents</button>
+          <span style="font-size:11px;color:var(--text-secondary);font-family:var(--mono);">Reads manifest + loads AGENT.md via bridge</span>
+        </div>
+        <div id="syncResult" style="font-family:var(--mono);font-size:11px;"></div>
+
+        <!-- Bridge Status -->
+        <div class="settings-section-title" style="margin-top:20px;">Bridge Status</div>
+        <div id="settingsBridgeInfo" style="background:var(--bg-card);border:1px solid var(--border-bright);padding:14px;font-family:var(--mono);font-size:11px;color:var(--text-secondary);line-height:1.9;border-radius:4px;">Checking...</div>
+
+        <!-- Validation -->
+        <div class="settings-section-title" style="margin-top:20px;">Validation</div>
+        <div class="validation-panel" id="settingsValidation" style="margin-bottom:10px;"><div style="font-family:var(--mono);font-size:11px;color:var(--text-secondary);">Click Validate to check project health</div></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary" onclick="runValidation()">✓ Validate Project</button>
           <button class="btn btn-ghost" onclick="runSystemTest()">⚙ System Test</button>
           <button class="btn btn-ghost" onclick="exportAccount()">↓ Export Account</button>
-          <button class="btn btn-ghost" onclick="exportProject()">Export project.json</button>
-          <button class="btn btn-ghost" onclick="openImportModal(null)">Import project.json</button>
-          <button class="btn btn-warn" onclick="resetToDefault()">Reset to Bundled Config</button>
+          <button class="btn btn-ghost" onclick="exportProject()">↓ Export project.json</button>
+          <button class="btn btn-ghost" onclick="openImportModal(null)">↑ Import project.json</button>
+          <button class="btn btn-warn" onclick="resetToDefault()">↺ Reset to Default</button>
         </div>
+
       </div>
     </div>
 
@@ -2465,7 +2490,10 @@ function renderSettings(){
   var _mp=m.model||{};var _mProv=_mp.default_provider||'__unset__';var _mProvCfg=(_mp.providers||{})[_mProv]||{};
   var _ceoDef=(m.agents||[]).find(function(a){return a.role==='ceo';})||null;
   var _ceoOverride=_ceoDef&&_ceoDef.model_override?_ceoDef.model_override:'using default';
-  var hasCeo=!!_ceoDef; var ceoBtn=document.getElementById('createCeoBtn'); if(ceoBtn)ceoBtn.style.display=hasCeo?'none':'';
+  var hasCeo=!!_ceoDef;
+  var ceoBtn=document.getElementById('createCeoBtn'); if(ceoBtn)ceoBtn.style.display=hasCeo?'none':'';
+  var ceoLbl=document.getElementById('ceoStatusLabel');
+  if(ceoLbl)ceoLbl.textContent=hasCeo?('CEO: '+(_ceoDef.display_name||_ceoDef.name)+' — '+(_ceoDef.provider_status||'configured')):'No CEO — click to create';
   document.getElementById('settingsModelInfo').innerHTML=[card('Provider',_mProv==='__unset__'?'Not configured':_mProv),card('Default Model',_mp.default_model||'—'),card('Fallback',_mp.fallback_model||'—'),card('CEO Override',_ceoOverride),card('Temp',_mProvCfg.temperature!==undefined?_mProvCfg.temperature:'—'),card('Max Tokens',_mProvCfg.max_tokens!==undefined?_mProvCfg.max_tokens:'—')].join('');
   const req=m.env?.required||[],opt=m.env?.optional||[];
   document.getElementById('settingsEnvInfo').innerHTML='<div class="validation-panel"><div style="font-family:var(--mono);font-size:11px;margin-bottom:6px;color:var(--text-secondary)">Required: '+req.map(v=>'<span style="color:var(--yellow);margin-right:8px">'+v+'</span>').join('')+'</div><div style="font-family:var(--mono);font-size:11px;color:var(--text-dim)">Optional: '+opt.map(v=>'<span style="margin-right:8px">'+v+'</span>').join('')+'</div></div>';
