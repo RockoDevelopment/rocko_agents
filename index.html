@@ -151,7 +151,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .status-btn[data-val="idle"].sel{border-color:var(--text-secondary);color:var(--text-secondary);}
 .status-btn[data-val="paused"].sel{border-color:var(--yellow);color:var(--yellow);}
 .editor-body{display:flex;flex:1;overflow:hidden;}
-.editor-main{flex:1;padding:20px 24px;overflow-y:auto;display:flex;flex-direction:column;gap:16px;}
+.editor-main{flex:1;padding:20px 24px;overflow-y:auto;display:flex;flex-direction:column;gap:16px;max-width:900px;width:100%;}
 .editor-main::-webkit-scrollbar{width:4px;}
 .editor-main::-webkit-scrollbar-thumb{background:var(--border);}
 .field-group{display:flex;flex-direction:column;gap:6px;}
@@ -218,7 +218,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .run-step-dur{color:var(--text-dim);margin-left:auto;}
 .run-empty{padding:20px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--text-dim);}
 /* SETTINGS */
-.settings-body{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px;}
+.settings-body{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px;max-width:920px;width:100%;}
 .settings-body::-webkit-scrollbar{width:3px;}
 .settings-body::-webkit-scrollbar-thumb{background:var(--border);}
 .section-label{font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-top:8px;}
@@ -307,7 +307,7 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .key-badge{font-family:var(--mono);font-size:9px;padding:2px 6px;border:1px solid;}
 .key-present{color:var(--green);border-color:var(--green-dim);}
 .key-missing{color:var(--red);border-color:rgba(255,71,87,.3);}
-.auto-body{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px;}
+.auto-body{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px;max-width:1040px;width:100%;}
 .auto-body::-webkit-scrollbar{width:3px;}
 .auto-body::-webkit-scrollbar-thumb{background:var(--border);}
 .empty-state{padding:30px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--text-dim);}
@@ -379,6 +379,8 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
    COMPANY RAIL
 ═══════════════════════════════════════════════════════════════ */
 body { display:flex; flex-direction:row; overflow:hidden; }
+.app-shell { visibility:hidden; }
+.app-shell.auth-ready { visibility:visible; }
 .company-rail{width:60px;min-width:60px;background:var(--bg-void);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:8px;overflow-y:auto;flex-shrink:0;z-index:50;}
 .company-rail::-webkit-scrollbar{display:none;}
 .company-slot{width:40px;height:40px;border-radius:8px;background:var(--bg-panel);border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:var(--cond);font-size:15px;font-weight:700;color:var(--text-dim);transition:all .2s;position:relative;overflow:hidden;flex-shrink:0;}
@@ -542,6 +544,11 @@ body { display:flex; flex-direction:row; overflow:hidden; }
 .team-agent-meta{font-family:var(--mono);font-size:10px;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap;}
 .team-skill-chip{font-family:var(--mono);font-size:9px;padding:2px 7px;background:rgba(71,130,255,.1);border:1px solid rgba(71,130,255,.3);color:var(--accent);margin-right:4px;}
 
+
+/* ── Page content max-width — keeps forms readable across all tabs ── */
+.view-scroll-body { max-width:1000px; width:100%; }
+.auto-panels      { max-width:1000px; }
+
 </style>
 <style>
 /* v4 additions */
@@ -563,7 +570,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
 .task-btn:hover{border-color:var(--accent);color:var(--accent);}
 .task-btn.run:hover{border-color:var(--green);color:var(--green);}
 .task-btn.del:hover{border-color:var(--red);color:var(--red);}
-.tasks-layout{display:flex;flex:1;overflow:hidden;}
+.tasks-layout{display:flex;flex:1;overflow:hidden;max-width:1040px;width:100%;}
 .tasks-sidebar{width:280px;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg-panel);}
 .tasks-sidebar-header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
 .tasks-filter{display:flex;gap:2px;padding:8px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
@@ -958,7 +965,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
         <div class="dash-title">Run History</div>
         <div style="margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text-dim)" id="historyCount">0 runs</div>
       </div>
-      <div style="display:flex;flex:1;overflow:hidden;">
+      <div style="display:flex;flex:1;overflow:hidden;max-width:1040px;width:100%;">
         <div style="width:340px;border-right:1px solid var(--border);overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;" id="historyList">
           <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);padding:20px;text-align:center;">No runs yet.<br>Run the pipeline to see history.</div>
         </div>
@@ -2396,12 +2403,7 @@ function selectRun(runId){
   el.appendChild(expBtn);
 }
 
-function exportRunReport(runId){
-  const report=RockoCore.exportRunReport(runId);if(!report)return;
-  const blob=new Blob([report.text],{type:'text/plain'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='run_'+runId+'.txt';a.click();
-  RockoCore.log('success','Run report exported: '+runId);
-}
+
 
 // ─────────────────────────────────────────────────────────
 // AGENT SYNC
@@ -2485,7 +2487,7 @@ function runValidation(){
   RockoCore.log(h.errors.length?'error':'success','Validation: '+h.errors.length+' errors, '+h.warns.length+' warnings');
 }
 
-function exportProject(){const proj=RockoCore.getActiveProject(),b=RockoCore.exportProject(proj);if(!b)return;const blob=new Blob([JSON.stringify(b.manifest,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=proj+'_project.json';a.click();RockoCore.log('success','Exported: '+proj+'_project.json');}
+
 function resetToDefault(){if(!confirm('Reset to bundled config? All edits lost.'))return;RockoCore.clearState();const b=BUNDLED_PROJECTS[APP_CONFIG.default_project];if(b){try{RockoCore.loadProject(JSON.parse(b));}catch{}}refreshAll();RockoCore.log('warn','Reset to bundled defaults');}
 
 // ─────────────────────────────────────────────────────────
@@ -3090,64 +3092,9 @@ setInterval(function() {
 // ═══════════════════════════════════════════════════════════════
 var _runtimes = [];
 
-async function loadRuntimes() {
-  var d = await bridgeGet('/runtimes');
-  if (!d) return;
-  _runtimes = d.runtimes || [];
-  renderRuntimes();
-}
 
-function renderRuntimes() {
-  var el = document.getElementById('runtimesList');
-  if (!el) return;
-  if (!_runtimes.length) {
-    el.innerHTML = '<div class="empty-state">No runtimes configured.<br>Add a <span style="color:var(--accent)">runtimes</span> section to your project.json to connect external agents.</div>';
-    return;
-  }
-  el.innerHTML = '';
-  _runtimes.forEach(function(rt) {
-    var lastOk = rt.last_ok;
-    var cardCls = lastOk === null || lastOk === undefined ? 'never' : lastOk ? 'ok' : 'err';
-    var riskCls = 'risk-' + (rt.risk_level || 'read_only');
-    var lastRun = rt.last_run_at ? new Date(rt.last_run_at).toLocaleTimeString() : 'never';
-    var card = document.createElement('div');
-    card.className = 'runtime-card ' + cardCls;
-    card.innerHTML =
-      '<div class="runtime-header">' +
-        '<div class="runtime-name">' + rt.id + '</div>' +
-        '<span class="runtime-type-badge">' + rt.type + '</span>' +
-        '<span class="risk-badge ' + riskCls + '">' + (rt.risk_level || 'read_only') + '</span>' +
-        (rt.requires_approval ? '<span class="key-badge" style="color:var(--yellow);border-color:rgba(255,209,102,.3)">⏸ APPROVAL</span>' : '') +
-      '</div>' +
-      (rt.description ? '<div class="runtime-desc">' + rt.description + '</div>' : '') +
-      '<div class="runtime-meta">' +
-        '<span>Runs: ' + (rt.run_count || 0) + '</span>' +
-        '<span>Last: ' + lastRun + '</span>' +
-        (rt.allowed_agents && rt.allowed_agents.length ? '<span>Allowed: ' + rt.allowed_agents.join(', ') + '</span>' : '<span>Allowed: all agents</span>') +
-        (rt.last_error ? '<span style="color:var(--red)">Last error: ' + rt.last_error.slice(0, 60) + '</span>' : '') +
-      '</div>';
-    var actions = document.createElement('div');
-    actions.className = 'runtime-actions';
-    var testBtn = document.createElement('button');
-    testBtn.className = 'btn btn-ghost';
-    testBtn.style.fontSize = '10px';
-    testBtn.style.padding = '4px 10px';
-    testBtn.textContent = '⚡ Test';
-    testBtn.addEventListener('click', function() { testRuntime(rt.id); });
-    actions.appendChild(testBtn);
-    if (!rt.requires_approval) {
-      var runBtn = document.createElement('button');
-      runBtn.className = 'btn btn-success';
-      runBtn.style.fontSize = '10px';
-      runBtn.style.padding = '4px 10px';
-      runBtn.textContent = '▶ Run';
-      runBtn.addEventListener('click', function() { runRuntime(rt.id); });
-      actions.appendChild(runBtn);
-    }
-    card.appendChild(actions);
-    el.appendChild(card);
-  });
-}
+
+
 
 async function testRuntime(id) {
   showLoading('Testing runtime: ' + id + '...');
@@ -3357,24 +3304,57 @@ function onboardingCreate() {
   var _proj = RockoCore.getActiveProject();
   var _prov = _obProviderConfig || {provider_id:'later', model:'', status:'configure_later'};
   var _ceoId = _agentName.toLowerCase().replace(/[^a-z0-9]/g,'_') + '_agent';
-  RockoCore.createAgent({
-    id:                  _ceoId,
-    name:                _agentName,
-    display_name:        _agentName,
-    role:                'ceo',
-    type:                'prompt',
-    description:         'Company orchestrator and decision maker',
-    status:              'active',
-    model_provider:      '__company_default__',
-    model_override:      _prov.model || null,
+  var _ceoInstructions = '# ' + _agentName + '\n\n'
+    + 'Role: CEO / Strategy Orchestrator\n'
+    + 'Company: ' + name + '\n'
+    + (desc ? 'Mission: ' + desc + '\n' : '')
+    + '\nYou are the CEO of ' + name + '. Orchestrate the agent team, '
+    + 'review pipeline results, and make strategic decisions. '
+    + 'When asked to build a team, respond with a hire_agent decision containing an agents[] array. '
+    + 'Each agent must include: name, role, agent_id, description, instructions, and optional skills.';
+
+  var _ceoAgent = {
+    id:                   _ceoId,
+    name:                 _agentName,
+    display_name:         _agentName,
+    role:                 'ceo',
+    type:                 'prompt',
+    description:          'Company orchestrator and decision maker.',
+    instructions:         _ceoInstructions,
+    _base_instructions:   _ceoInstructions,
+    status:               'active',
+    model_provider:       '__company_default__',
+    model_override:       _prov.model || null,
     using_company_default: true,
-    provider_status:     _prov.status || 'configure_later',
-    pipeline_step:       _ceoId + '_step',
-    enabled:             true,
-    projectName:         _proj,
+    provider_status:      _prov.status || 'configure_later',
+    pipeline_step:        _ceoId + '_step',
+    enabled:              true,
+    skills:               [],
+    projectName:          _proj,
+  };
+
+  // Register in RockoCore (project manifest + localStorage)
+  // createAgent(proj, def, instructions) — must pass project name first
+  if (_proj) RockoCore.createAgent(_proj, _ceoAgent, _ceoInstructions);
+
+  // Persist to bridge so CEO survives restart and is tied to the company
+  bridgePost('/agents/create', {
+    agent_id:       _ceoId,
+    id:             _ceoId,
+    name:           _agentName,
+    display_name:   _agentName,
+    role:           'ceo',
+    description:    _ceoAgent.description,
+    instructions:   _ceoInstructions,
+    model_provider: '__company_default__',
+    model_override: _prov.model || null,
+    skills:         [],
   });
-  toastOk('Company created: ' + name);
+
+  toastOk('Company created: ' + name + ' — CEO ready');
+  // Refresh twice: once now, once after a short delay to catch async writes
   refreshAll();
+  setTimeout(function(){ refreshAll(); }, 400);
 }
 function onboardingImport() {
   var path = prompt('Enter the path to your project.json:');
@@ -3763,44 +3743,33 @@ async function bootCompanyLayer() {
   } catch(e) { /* bridge offline — fall through to localStorage */ }
 
   if (bridgeCompanies) {
-    // Merge logo data from localStorage (logos stored browser-side only)
+    // Merge logos from localStorage (stored browser-side only)
     var localList = getCompanies();
     bridgeCompanies = bridgeCompanies.map(function(co) {
       var local = localList.find(function(l){ return l.id === co.id; });
       if (local && local.logo) co.logo = local.logo;
       return co;
     });
-    // Preserve active flag: honour bridge order, keep last active from local
-    var activeId = null;
-    var localActive = localList.find(function(c){ return c.active; });
-    if (localActive) activeId = localActive.id;
-    if (!activeId) activeId = bridgeCompanies[0].id;
-    bridgeCompanies.forEach(function(c){ c.active = c.id === activeId; });
-    // Write back to localStorage as cache (without _manifest to avoid quota)
+    // Cache to localStorage (without _manifest)
     var lean = bridgeCompanies.map(function(c){
       var copy = Object.assign({}, c); delete copy._manifest; return copy;
     });
     try { localStorage.setItem(COMPANIES_KEY, JSON.stringify(lean)); } catch(e) {}
-    var active = bridgeCompanies.find(function(c){ return c.active; }) || bridgeCompanies[0];
+    // Always show onboarding — returning users see picker, new users see create form
     renderCompanyRail();
-    updateTopbarCompany(active);
-    hideOnboarding();
+    showOnboarding();
     return;
   }
 
-  // ── Fallback: bridge offline or no companies on bridge yet ─────────────────
-  // Use localStorage cache so UI still works when bridge is temporarily down
+  // ── Fallback: bridge offline — use localStorage cache ─────────────────────
   var companies = getCompanies();
   if (companies.length > 0) {
-    var active = getActiveCompany();
-    if (!active) { companies[0].active = true; saveCompanies(companies); active = companies[0]; }
     renderCompanyRail();
-    updateTopbarCompany(active);
-    hideOnboarding();
+    showOnboarding();
     return;
   }
 
-  // ── No companies anywhere — show onboarding ────────────────────────────────
+  // ── No companies anywhere — show create form ──────────────────────────────
   showOnboarding();
 }
 
@@ -3898,7 +3867,9 @@ async function submitLogin() {
     _currentUser = res.user;
     hideLoginOverlay();
     updateTopbarUser(res.user);
-    bootCompanyLayer();
+    await bootCompanyLayer();
+    var _sh = document.getElementById('appShell');
+    if (_sh) _sh.classList.add('auth-ready');
   } else if (!res) {
     showLoginError('loginError', 'Bridge is not running — start RockoAgents first (rocko.exe run)');
   } else if (res.detail && res.detail.toString().includes('404')) {
@@ -3922,7 +3893,9 @@ async function submitSignup() {
     _currentUser = res.user;
     hideLoginOverlay();
     updateTopbarUser(res.user);
-    bootCompanyLayer();
+    await bootCompanyLayer();
+    var _sh = document.getElementById('appShell');
+    if (_sh) _sh.classList.add('auth-ready');
   } else if (!res) {
     showLoginError('signupError', 'Bridge offline — run rocko.exe run first');
   } else if (res.status === 404 || (res.detail && res.detail.toString().includes('404'))) {
@@ -4226,72 +4199,11 @@ var _pgDb     = null;
 var _pgReady  = false;
 var _pgQueue  = [];   // writes queued before PGlite is ready
 
-async function initPGlite() {
-  try {
-    // Wait for PGlite to load via the module script
-    if (!window._PGliteClass) {
-      await new Promise(function(resolve) {
-        if (window._PGliteClass) { resolve(); return; }
-        window.addEventListener('pglite-ready', resolve, {once:true});
-        setTimeout(resolve, 3000);  // timeout fallback
-      });
-    }
-    if (!window._PGliteClass) {
-      console.warn('PGlite unavailable — using localStorage only');
-      return;
-    }
-    var PGlite = window._PGliteClass;
-    // Use IndexedDB backend for persistence across page refreshes
-    try {
-      _pgDb = new PGlite('idb://rockoagents-v1');
-    } catch(e) {
-      console.warn('PGlite IDB failed, using memory:', e);
-      _pgDb = new PGlite();
-    }
-    await _pgDb.waitReady;
-    // Create key-value store table
-    await _pgDb.exec(
-      "CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT, ts TIMESTAMPTZ DEFAULT NOW())"
-    );
-    _pgReady = true;
-    // Flush queued writes
-    for (var i = 0; i < _pgQueue.length; i++) {
-      var item = _pgQueue[i];
-      await _pgSet(item.key, item.val);
-    }
-    _pgQueue = [];
-    // Migrate any existing localStorage data into PGlite
-    await _pgMigrateFromLocalStorage();
-    console.log('[PGlite] Ready — durable storage active');
-  } catch(e) {
-    console.warn('[PGlite] Init failed — using localStorage only:', e);
-  }
-}
 
-async function _pgSet(key, value) {
-  if (!_pgDb) return;
-  try {
-    var v = typeof value === 'string' ? value : JSON.stringify(value);
-    // PGlite: use query() for parameterized SQL, exec() is string-only
-    await _pgDb.query(
-      "INSERT INTO kv(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=$2",
-      [key, v]
-    );
-  } catch(e) { console.warn('[PGlite] write error:', e); }
-}
 
-async function _pgGet(key) {
-  if (!_pgDb) return null;
-  try {
-    // PGlite query() returns {rows: [{v: "..."}], fields: [...]}
-    var result = await _pgDb.query("SELECT value FROM kv WHERE key=$1", [key]);
-    if (result && result.rows && result.rows.length > 0) {
-      var raw = result.rows[0].value;
-      try { return JSON.parse(raw); } catch { return raw; }
-    }
-  } catch(e) { console.warn('[PGlite] read error:', e); }
-  return null;
-}
+
+
+
 
 function pgWrite(key, value) {
   // Sync fast-path: localStorage
@@ -4326,21 +4238,7 @@ async function pgRead(key) {
   return null;
 }
 
-async function _pgMigrateFromLocalStorage() {
-  // On first PGlite init, copy all localStorage data into PGlite
-  var migrated = await _pgGet('__migrated_v1');
-  if (migrated) return;
-  var count = 0;
-  for (var i = 0; i < localStorage.length; i++) {
-    var k = localStorage.key(i);
-    if (k && k.startsWith('rockoagents')) {
-      await _pgSet(k, localStorage.getItem(k));
-      count++;
-    }
-  }
-  await _pgSet('__migrated_v1', 'true');
-  if (count > 0) console.log('[PGlite] Migrated ' + count + ' keys from localStorage');
-}
+
 
 // Override RockoCore saveState to use pgWrite
 // This is called after RockoCore is defined
@@ -4362,15 +4260,20 @@ function patchRockoCorePersistence() {
 }
 
 async function fullBoot() {
-  bootPGlite();
-  var authed = await bootAuth();
-  if (authed) { await bootCompanyLayer(); }
+  bootPGlite().then(function(ok) {
+    if (ok) RockoCore.log('info', 'PGlite: storage active');
+  });
+  // Always clear session on fresh boot — login is required every time the app starts
+  setSessionToken(null);
+  _sessionToken = null;
+  _currentUser  = null;
+  showLoginOverlay();
   startPolling();
   initProviderSelection();
   init();
 }
 
-// ── Provider test ─────────────────────────────────────────────
+
 async function testProvider(providerId) {
   showLoading('Testing ' + providerId + ' connection...');
   var r = await bridgePost('/models/providers/' + providerId + '/test', {});
@@ -4604,25 +4507,6 @@ async function validateSelectedProvider() {
   statusEl.style.color = r.ok ? 'var(--green)' : (r.status === 'offline' ? 'var(--yellow)' : 'var(--red)');
 }
 
-// Override onboardingCreate to include provider
-var _obCreateBase = onboardingCreate;
-onboardingCreate = function() {
-  // 'later' is a valid intentional choice — all others require validation
-  if (!_selectedProvider) { _selectedProvider = {id:'later',name:'Configure Later',defaultModel:'',local:false,envVar:null}; }
-  if (_selectedProvider.id === 'later') { _obProviderConfig = {provider_id:'later',model:'',status:'configure_later'}; _obCreateBase(); return; }
-  // Build provider config to store with company
-  var modelInput = document.getElementById('ob-model');
-  var model = modelInput ? modelInput.value.trim() : _selectedProvider.defaultModel;
-  var customBase = (document.getElementById('ob-custom-base') || {}).value || '';
-  _obProviderConfig = {
-    provider_id: _selectedProvider.id,
-    model:       model || _selectedProvider.defaultModel,
-    base_url:    customBase || _selectedProvider.baseUrl || '',
-    env_var:     _selectedProvider.envVar,
-    status:      _providerValidated ? 'validated' : 'pending',
-  };
-  _obCreateBase();
-};
 var _obProviderConfig = null;
 
 // Init provider list on boot
