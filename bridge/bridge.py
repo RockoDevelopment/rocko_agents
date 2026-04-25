@@ -1144,7 +1144,11 @@ def _load_companies() -> dict:
     f = _companies_file()
     if f.exists():
         try:
-            with open(f) as fp: return json.load(fp)
+            data = json.load(open(f))
+            if isinstance(data, list):
+                return {co["id"]: co for co in data if isinstance(co, dict) and "id" in co}
+            if isinstance(data, dict):
+                return data
         except Exception: pass
     return {}
 

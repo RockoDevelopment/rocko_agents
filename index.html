@@ -1790,7 +1790,7 @@ const RockoCore = (() => {
     const agentDefs=agents.length?agents:[{id:'ceo',name:'CEO',display_name:'CEO',role:'ceo',type:'prompt',instruction_file:'agents\\ceo\\AGENT.md',model_provider:'anthropic',model_override:null,pipeline_step:'ceo_step',enabled:true,project_tools:['filesystem','http'],apis:[],local_code:null,description:'Orchestrator.'}];
     const pipelineOrder=agentDefs.map(a=>({step_id:a.pipeline_step||a.id+'_step',label:a.name,type:'agent',agent_id:a.id,requires_approval:a.role==='ceo'}));
     return{schema_version:'2.0',project:{id,name,display_name:name,description,root_path:rootPath,environment_file:'.env',created:new Date().toISOString().split('T')[0],tags:[]},
-      model:{default_provider:prov&&prov.id!=='later'?prov.id:'__unset__',default_model:prov&&prov.model?prov.model:'',fallback_model:'',providers:_buildProviderBlock(prov||{id:'__unset__'})},
+      model:{default_provider:'__unset__',default_model:'',fallback_model:'',providers:{}},
       paths:{agents_root:'agents',vault_root:'vault',logs_root:'logs',outputs_root:'outputs',data_root:'data',src_root:'src'},
       databases:{},vault:{root:'vault',folders:{memory:'vault\\memory',outputs:'vault\\outputs'}},
       env:{required:['ANTHROPIC_API_KEY'],optional:['LOG_LEVEL'],env_file:'.env'},
@@ -2507,7 +2507,7 @@ function renderProjectDropdown(){
 }
 function toggleProjectDropdown(){document.getElementById('projectDropdown')?.classList.toggle('open');}
 function switchProject(name,e){e.stopPropagation();RockoCore.setActiveProject(name);document.getElementById('projectDropdown')?.classList.remove('open');refreshAll();RockoCore.log('info','Switched to: '+name);}
-document.addEventListener('click',e=>{if(!document.getElementById('projectSwitcher').contains(e.target))document.getElementById('projectDropdown')?.classList.remove('open');});
+document.addEventListener('click',function(e){ var _ps=document.getElementById('projectSwitcher'); if(_ps&&!_ps.contains(e.target)){document.getElementById('projectDropdown')?.classList.remove('open');} });
 function openImportModal(e){if(e)e.stopPropagation();document.getElementById('projectDropdown')?.classList.remove('open');openModal('importProjectModal');}
 function importProjectFromFile(){
   const file=document.getElementById('projectFileInput').files[0];if(!file){alert('Select a file');return;}
@@ -4362,15 +4362,14 @@ function patchRockoCorePersistence() {
 }
 
 async function fullBoot() {
-  // 1. Init PGlite (unlimited storage) — runs in background, non-blocking
-  bootPGlite().then(function(ok) {
-    if (ok) RockoCore.log('info', 'PGlite: unlimited IndexedDB storage active');
-  });
-  // 2. Auth
+  bootPGlite();
   var authed = await bootAuth();
   if (authed) { await bootCompanyLayer(); }
-  // 3. Start polling + init UI
-  
+  startPolling();
+  initProviderSelection();
+  init();
+}
+
 // ── Provider test ─────────────────────────────────────────────
 async function testProvider(providerId) {
   showLoading('Testing ' + providerId + ' connection...');
@@ -4732,10 +4731,6 @@ function showOrchestratorResult(result) {
   }
 }
 
-startPolling();
-  init();
-  setTimeout(patchRockoCorePersistence, 500);
-}
 fullBoot();
 </script>
 
