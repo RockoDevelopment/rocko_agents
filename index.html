@@ -550,6 +550,15 @@ body { display:flex; flex-direction:row; overflow:hidden; }
 .view-scroll-body { max-width:1000px; width:100%; }
 .auto-panels      { max-width:1000px; }
 
+
+/* ── Settings form layout ─────────────────────── */
+.settings-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.settings-field { display:flex; flex-direction:column; gap:4px; }
+.settings-label { font-family:var(--mono); font-size:9px; letter-spacing:2px; text-transform:uppercase; color:var(--text-secondary); }
+.settings-input { background:var(--bg-card); border:1px solid var(--border-bright); color:var(--text-primary); padding:9px 12px; font-family:var(--mono); font-size:12px; border-radius:4px; outline:none; width:100%; box-sizing:border-box; }
+.settings-input:focus { border-color:var(--accent); }
+.settings-input option { background:var(--bg-card); color:var(--text-primary); }
+
 </style>
 <style>
 /* v4 additions */
@@ -980,66 +989,130 @@ body { display:flex; flex-direction:row; overflow:hidden; }
     <div class="view" id="view-settings">
       <div class="dash-header">
         <div class="dash-title">Settings</div>
-        <div style="margin-left:auto;display:flex;gap:8px;">
-          <button class="btn btn-ghost" onclick="openLogModal()">Logs</button>
-        </div>
+        <div style="margin-left:auto;"><button class="btn btn-ghost" onclick="openLogModal()">Logs</button></div>
       </div>
       <div class="settings-body">
 
-        <!-- Active Project -->
-        <div class="settings-section-title">Active Project</div>
-        <div class="info-grid" id="settingsProjectInfo"></div>
-
-        <!-- Model Configuration -->
-        <div class="settings-section-title" style="margin-top:20px;">Model Configuration</div>
-        <div class="info-grid" id="settingsModelInfo"></div>
-
-        <!-- CEO Agent -->
-        <div class="settings-section-title" style="margin-top:20px;">CEO Agent</div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <button class="btn btn-primary" id="createCeoBtn" style="display:none;" onclick="createMissingCEO()">★ Create CEO Agent</button>
-          <span style="font-size:11px;color:var(--text-secondary);font-family:var(--mono);" id="ceoStatusLabel"></span>
+        <!-- ── COMPANY ────────────────────────────────── -->
+        <div class="settings-section-title">Company</div>
+        <div class="settings-row">
+          <div class="settings-field">
+            <label class="settings-label">Company Name</label>
+            <input class="settings-input" id="cfg-company-name" placeholder="e.g. Acme Corp" oninput="settingsMarkDirty()">
+          </div>
+          <div class="settings-field">
+            <label class="settings-label">Project Folder Path</label>
+            <input class="settings-input" id="cfg-project-path" placeholder="e.g. C:/Projects/MyCompany" oninput="settingsMarkDirty()">
+          </div>
+        </div>
+        <div class="settings-field" style="margin-top:8px;">
+          <label class="settings-label">Company Description / Mission</label>
+          <textarea class="settings-input" id="cfg-description" rows="2" placeholder="What does this company do?" oninput="settingsMarkDirty()" style="resize:vertical;"></textarea>
         </div>
 
-        <!-- Environment Variables -->
-        <div class="settings-section-title" style="margin-top:20px;">Environment Variables</div>
-        <div id="settingsEnvInfo"></div>
+        <!-- ── MODEL CONFIGURATION ────────────────────── -->
+        <div class="settings-section-title" style="margin-top:24px;">Model Configuration</div>
+        <div class="settings-row">
+          <div class="settings-field">
+            <label class="settings-label">Default Provider</label>
+            <select class="settings-input" id="cfg-provider" onchange="settingsProviderChanged();settingsMarkDirty()">
+              <option value="later">— Configure Later —</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="nvidia">NVIDIA</option>
+              <option value="ollama">Ollama (Local)</option>
+              <option value="lmstudio">LM Studio (Local)</option>
+              <option value="custom">Custom Endpoint</option>
+            </select>
+          </div>
+          <div class="settings-field">
+            <label class="settings-label">Default Model</label>
+            <input class="settings-input" id="cfg-model" placeholder="e.g. claude-sonnet-4-20250514" oninput="settingsMarkDirty()">
+          </div>
+        </div>
+        <div class="settings-field" style="margin-top:8px;" id="cfg-base-url-row">
+          <label class="settings-label">Custom Base URL</label>
+          <input class="settings-input" id="cfg-base-url" placeholder="http://localhost:11434/v1" oninput="settingsMarkDirty()">
+        </div>
 
-        <!-- APIs -->
-        <div class="settings-section-title" style="margin-top:20px;">APIs Configured</div>
-        <div id="settingsApiInfo"></div>
+        <!-- ── API KEYS ────────────────────────────────── -->
+        <div class="settings-section-title" style="margin-top:24px;">API Keys</div>
+        <div class="settings-row">
+          <div class="settings-field">
+            <label class="settings-label">Anthropic API Key</label>
+            <input class="settings-input" id="cfg-key-anthropic" type="password" placeholder="sk-ant-..." oninput="settingsMarkDirty()">
+          </div>
+          <div class="settings-field">
+            <label class="settings-label">OpenAI API Key</label>
+            <input class="settings-input" id="cfg-key-openai" type="password" placeholder="sk-..." oninput="settingsMarkDirty()">
+          </div>
+        </div>
+        <div class="settings-row" style="margin-top:8px;">
+          <div class="settings-field">
+            <label class="settings-label">Google Gemini API Key</label>
+            <input class="settings-input" id="cfg-key-gemini" type="password" placeholder="AIza..." oninput="settingsMarkDirty()">
+          </div>
+          <div class="settings-field">
+            <label class="settings-label">NVIDIA API Key</label>
+            <input class="settings-input" id="cfg-key-nvidia" type="password" placeholder="nvapi-..." oninput="settingsMarkDirty()">
+          </div>
+        </div>
 
-        <!-- Agent Sync -->
-        <div class="settings-section-title" style="margin-top:20px;">Agent Sync</div>
+        <!-- ── NOTIFICATIONS ──────────────────────────── -->
+        <div class="settings-section-title" style="margin-top:24px;">Notifications</div>
+        <div class="settings-row">
+          <div class="settings-field">
+            <label class="settings-label">Email Address</label>
+            <input class="settings-input" id="cfg-email" type="email" placeholder="you@example.com" oninput="settingsMarkDirty()">
+          </div>
+          <div class="settings-field">
+            <label class="settings-label">Webhook URL (optional)</label>
+            <input class="settings-input" id="cfg-webhook" placeholder="https://hooks.slack.com/..." oninput="settingsMarkDirty()">
+          </div>
+        </div>
+
+        <!-- ── CEO AGENT ───────────────────────────────── -->
+        <div class="settings-section-title" style="margin-top:24px;">CEO Agent</div>
+        <div style="background:var(--bg-card);border:1px solid var(--border-bright);border-radius:4px;padding:14px;">
+          <div id="ceoStatusLabel" style="font-family:var(--mono);font-size:11px;color:var(--text-secondary);margin-bottom:10px;">Checking...</div>
+          <button class="btn btn-primary" id="createCeoBtn" style="display:none;" onclick="createMissingCEO()">★ Create CEO Agent</button>
+        </div>
+
+        <!-- ── AGENT SYNC ──────────────────────────────── -->
+        <div class="settings-section-title" style="margin-top:24px;">Agent Sync</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
           <button class="btn btn-warn" onclick="syncAgentsNow()">⟳ Sync Agents</button>
-          <span style="font-size:11px;color:var(--text-secondary);font-family:var(--mono);">Reads manifest + loads AGENT.md via bridge</span>
+          <span style="font-size:11px;color:var(--text-secondary);font-family:var(--mono);">Reads project.json manifest + loads AGENT.md via bridge</span>
         </div>
-        <div id="syncResult" style="font-family:var(--mono);font-size:11px;"></div>
+        <div id="syncResult" style="font-family:var(--mono);font-size:11px;color:var(--text-secondary);"></div>
 
-        <!-- Bridge Status -->
-        <div class="settings-section-title" style="margin-top:20px;">Bridge Status</div>
+        <!-- ── BRIDGE STATUS ───────────────────────────── -->
+        <div class="settings-section-title" style="margin-top:24px;">Bridge Status</div>
         <div id="settingsBridgeInfo" style="background:var(--bg-card);border:1px solid var(--border-bright);padding:14px;font-family:var(--mono);font-size:11px;color:var(--text-secondary);line-height:1.9;border-radius:4px;">Checking...</div>
 
-        <!-- Validation -->
-        <div class="settings-section-title" style="margin-top:20px;">Validation</div>
-        <div class="validation-panel" id="settingsValidation" style="margin-bottom:10px;"><div style="font-family:var(--mono);font-size:11px;color:var(--text-secondary);">Click Validate to check project health</div></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-primary" onclick="runValidation()">✓ Validate Project</button>
+        <!-- ── SAVE + ACTIONS ──────────────────────────── -->
+        <div class="settings-section-title" style="margin-top:24px;">Actions</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+          <button class="btn btn-primary" onclick="saveSettingsForm()" id="saveSettingsBtn">💾 Save Settings</button>
+          <button class="btn btn-ghost" onclick="runValidation()">✓ Validate Project</button>
           <button class="btn btn-ghost" onclick="runSystemTest()">⚙ System Test</button>
-          <button class="btn btn-ghost" onclick="exportAccount()">↓ Export Account</button>
           <button class="btn btn-ghost" onclick="exportProject()">↓ Export project.json</button>
           <button class="btn btn-ghost" onclick="openImportModal(null)">↑ Import project.json</button>
           <button class="btn btn-warn" onclick="resetToDefault()">↺ Reset to Default</button>
+        </div>
+        <div id="settingsSaveResult" style="font-family:var(--mono);font-size:11px;"></div>
+
+        <!-- ── VALIDATION ──────────────────────────────── -->
+        <div class="settings-section-title" style="margin-top:8px;">Validation</div>
+        <div class="validation-panel" id="settingsValidation" style="margin-bottom:10px;border:1px solid var(--border-bright);">
+          <div style="font-family:var(--mono);font-size:11px;color:var(--text-secondary);">Click Validate to check project health</div>
         </div>
 
       </div>
     </div>
 
-  </div>
-</div>
-
-    <!-- RUNTIMES -->
+  <!-- RUNTIMES -->
     <div class="view" id="view-runtimes">
       <div class="dash-header">
         <div class="dash-title">External Runtimes</div>
@@ -2483,6 +2556,90 @@ function createMissingCEO() {
   setTimeout(function(){ refreshAll(); }, 300);
 }
 
+// ── Settings form ─────────────────────────────────────────────
+function settingsMarkDirty() {
+  var btn = document.getElementById('saveSettingsBtn');
+  if (btn) { btn.textContent = '💾 Save Settings *'; btn.style.background = 'var(--yellow)'; btn.style.color = '#000'; }
+}
+
+function settingsProviderChanged() {
+  var prov = (document.getElementById('cfg-provider')||{}).value || 'later';
+  var row  = document.getElementById('cfg-base-url-row');
+  if (row) row.style.display = (prov==='ollama'||prov==='lmstudio'||prov==='custom') ? '' : 'none';
+  var modelMap = {anthropic:'claude-sonnet-4-20250514',openai:'gpt-4o',gemini:'gemini-2.0-flash',nvidia:'nvidia/llama-3.1-nemotron-ultra-253b-v1',ollama:'llama3.2',lmstudio:'local-model',later:''};
+  var mInput = document.getElementById('cfg-model');
+  if (mInput && !mInput.value) mInput.value = modelMap[prov] || '';
+}
+
+function loadSettingsForm() {
+  var co = getActiveCompany(); if (!co) return;
+  var _s = function(id, val) { var el=document.getElementById(id); if(el) el.value = val||''; };
+  _s('cfg-company-name', co.display_name);
+  _s('cfg-project-path', co.project_path);
+  _s('cfg-description',  co.description);
+  _s('cfg-provider',     co.default_provider || 'later');
+  _s('cfg-model',        co.default_model    || '');
+  _s('cfg-base-url',     co.base_url         || '');
+  _s('cfg-email',        co.email            || '');
+  _s('cfg-webhook',      co.webhook          || '');
+  // Load stored API keys (from localStorage, never sent to server unencrypted)
+  var keys = JSON.parse(localStorage.getItem('rocko_api_keys')||'{}');
+  _s('cfg-key-anthropic', keys.anthropic || '');
+  _s('cfg-key-openai',    keys.openai    || '');
+  _s('cfg-key-gemini',    keys.gemini    || '');
+  _s('cfg-key-nvidia',    keys.nvidia    || '');
+  settingsProviderChanged();
+  // CEO status
+  var proj = RockoCore.getActiveProject();
+  var m    = proj ? RockoCore.getProject(proj) : null;
+  var hasCeo = m && (m.agents||[]).some(function(a){return a.role==='ceo';});
+  var ceoLbl = document.getElementById('ceoStatusLabel');
+  var ceoBtn = document.getElementById('createCeoBtn');
+  if (ceoLbl) ceoLbl.textContent = hasCeo ? ('CEO active — ' + (co.display_name||'')) : 'No CEO agent — create one below';
+  if (ceoBtn) ceoBtn.style.display = hasCeo ? 'none' : '';
+  // Reset dirty state
+  var saveBtn = document.getElementById('saveSettingsBtn');
+  if (saveBtn) { saveBtn.textContent = '💾 Save Settings'; saveBtn.style.background=''; saveBtn.style.color=''; }
+}
+
+function saveSettingsForm() {
+  var _g = function(id){ var el=document.getElementById(id); return el?el.value.trim():''; };
+  var co = getActiveCompany(); if (!co) { toastErr('No active company'); return; }
+  // Update company object
+  co.display_name     = _g('cfg-company-name') || co.display_name;
+  co.project_path     = _g('cfg-project-path') || co.project_path;
+  co.description      = _g('cfg-description');
+  co.default_provider = _g('cfg-provider');
+  co.default_model    = _g('cfg-model');
+  co.base_url         = _g('cfg-base-url');
+  co.email            = _g('cfg-email');
+  co.webhook          = _g('cfg-webhook');
+  co.provider_status  = 'pending';
+  // Save API keys to localStorage only
+  var keys = {
+    anthropic: _g('cfg-key-anthropic'),
+    openai:    _g('cfg-key-openai'),
+    gemini:    _g('cfg-key-gemini'),
+    nvidia:    _g('cfg-key-nvidia'),
+  };
+  localStorage.setItem('rocko_api_keys', JSON.stringify(keys));
+  // Persist company
+  var list = getCompanies();
+  var idx  = list.findIndex(function(c){ return c.id===co.id; });
+  if (idx > -1) list[idx] = co;
+  saveCompanies(list);
+  bridgePost('/companies', {
+    id: co.id, display_name: co.display_name, description: co.description,
+    project_path: co.project_path, active: true,
+  });
+  var res = document.getElementById('settingsSaveResult');
+  if (res) { res.textContent = '✓ Saved at ' + new Date().toLocaleTimeString(); res.style.color='var(--green)'; }
+  var saveBtn = document.getElementById('saveSettingsBtn');
+  if (saveBtn) { saveBtn.textContent = '💾 Save Settings'; saveBtn.style.background=''; saveBtn.style.color=''; }
+  toastOk('Settings saved');
+  updateTopbarCompany(co);
+}
+
 function renderSettings(){
   const proj=RockoCore.getActiveProject(),m=RockoCore.getProject(proj);if(!m)return;
   const card=(k,v)=>'<div class="info-card"><div class="info-card-label">'+k+'</div><div class="info-card-val">'+(v||'—')+'</div></div>';
@@ -2497,9 +2654,7 @@ function renderSettings(){
   document.getElementById('settingsModelInfo').innerHTML=[card('Provider',_mProv==='__unset__'?'Not configured':_mProv),card('Default Model',_mp.default_model||'—'),card('Fallback',_mp.fallback_model||'—'),card('CEO Override',_ceoOverride),card('Temp',_mProvCfg.temperature!==undefined?_mProvCfg.temperature:'—'),card('Max Tokens',_mProvCfg.max_tokens!==undefined?_mProvCfg.max_tokens:'—')].join('');
   const req=m.env?.required||[],opt=m.env?.optional||[];
   document.getElementById('settingsEnvInfo').innerHTML='<div class="validation-panel"><div style="font-family:var(--mono);font-size:11px;margin-bottom:6px;color:var(--text-secondary)">Required: '+req.map(v=>'<span style="color:var(--yellow);margin-right:8px">'+v+'</span>').join('')+'</div><div style="font-family:var(--mono);font-size:11px;color:var(--text-dim)">Optional: '+opt.map(v=>'<span style="margin-right:8px">'+v+'</span>').join('')+'</div></div>';
-  const apis=Object.entries(m.apis||{});
-  document.getElementById('settingsApiInfo').innerHTML='<div class="validation-panel">'+
-    (apis.length?apis.map(([k,v])=>'<div style="font-family:var(--mono);font-size:11px;color:var(--text-secondary);padding:3px 0;border-bottom:1px solid var(--border)"><span style="color:var(--accent);display:inline-block;min-width:160px">'+k+'</span>['+v.auth_type+'] '+v.base_url+'</div>').join(''):'<div style="color:var(--text-dim);font-family:var(--mono);font-size:11px">None configured</div>')+'</div>';
+  loadSettingsForm();
 }
 function runValidation(){
   const proj=RockoCore.getActiveProject(),m=RockoCore.getProject(proj);if(!m)return;
