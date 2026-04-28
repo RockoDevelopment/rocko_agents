@@ -29,6 +29,7 @@ env/
 .env
 .env.*
 !.env.example
+external_nodes/hummingbot_node/
 
 # ── Secrets — never commit these ─────────────────────────────────────────────
 *.key
