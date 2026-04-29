@@ -703,7 +703,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
   </div>
 
   <!-- Template gallery panel (onboarding) -->
-  <div class="onboarding-card" id="onboardingTemplatePanel" style="display:none;width:100%;max-width:860px;">
+  <div class="onboarding-card" id="onboardingTemplatePanel" style="display:none;width:min(1100px,calc(100vw - 48px));max-width:none;">
     <div style="display:flex;align-items:center;margin-bottom:24px;">
       <div>
         <div class="onboarding-title">Start From a Template</div>
@@ -711,7 +711,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
       </div>
       <button class="btn btn-ghost" style="margin-left:auto;padding:8px 16px;font-size:11px;" onclick="showOnboardingCreate()">← Back</button>
     </div>
-    <div id="ob-template-gallery" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px;"></div>
+    <div id="ob-template-gallery" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:24px;"></div>
     <!-- Template selected confirmation -->
     <div id="ob-template-selected" style="display:none;padding:16px;background:rgba(71,130,255,.06);border:1px solid rgba(71,130,255,.25);margin-bottom:20px;">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
@@ -3557,6 +3557,10 @@ function _createCompany(displayName, description, path, logo) {
     description: description,
   });
   var prov = _obProviderConfig || {provider_id:'later', model:'', status:'configure_later'};
+  if (_selectedProvider && _selectedProvider.id === 'free_proxy') {
+    var _backend = FREE_PROXY_BACKENDS.find(function(b){ return b.id === _selectedFreeBackend; }) || FREE_PROXY_BACKENDS[0];
+    prov = { provider_id:'free_proxy', model:_backend.models.sonnet, base_url:'http://localhost:8082', status:'free_tier' };
+  }
   var co = {
     id: id,
     display_name: displayName,
@@ -3574,7 +3578,6 @@ function _createCompany(displayName, description, path, logo) {
   if (!list.length) co.active = true;
   list.push(co);
   saveCompanies(list);
-  // Also write new company directly to bridge so it persists to account
   bridgePost('/companies', {
     id:           co.id,
     display_name: co.display_name,
@@ -3587,92 +3590,51 @@ function _createCompany(displayName, description, path, logo) {
   RockoCore.setActiveProject(proj.project.name);
   list.forEach(function(c){ c.active = c.id === id; });
   saveCompanies(list);
+
+  // ── AUTO-CREATE CEO ────────────────────────────────────────────────────────
+  // Every company always gets a CEO. This is atomic with company creation.
+  var _projName = proj.project.name;
+  var _ceoId = 'ceo_agent';
+  var _ceoInstr = '# CEO\n\nRole: CEO / Strategy Orchestrator\nCompany: ' + displayName + '\n'
+    + (description ? 'Mission: ' + description + '\n' : '')
+    + '\nYou are the CEO of ' + displayName + '. Orchestrate the agent team, '
+    + 'review pipeline results, and make strategic decisions. '
+    + 'When asked to build a team, respond with a hire_agent decision containing an agents[] array. '
+    + 'Each agent must include: name, role, agent_id, description, instructions, and optional skills.';
+  var _ceoAgent = {
+    id: _ceoId, name: 'CEO', display_name: 'CEO', role: 'ceo', type: 'prompt',
+    description: 'Company orchestrator and decision maker.',
+    instructions: _ceoInstr, _base_instructions: _ceoInstr,
+    status: 'active', model_provider: '__company_default__', model_override: prov.model || null,
+    using_company_default: true, provider_status: prov.status || 'configure_later',
+    pipeline_step: _ceoId + '_step', enabled: true, skills: [], projectName: _projName,
+  };
+  RockoCore.createAgent(_projName, _ceoAgent, _ceoInstr);
+  bridgePost('/agents/create', {
+    agent_id: _ceoId, id: _ceoId, name: 'CEO', display_name: 'CEO', role: 'ceo',
+    description: _ceoAgent.description, instructions: _ceoInstr,
+    model_provider: '__company_default__', model_override: prov.model || null, skills: [],
+  });
+  // ──────────────────────────────────────────────────────────────────────────
+
   renderCompanyRail();
   updateTopbarCompany(co);
   hideOnboarding();
   closeModal('companyModal');
   refreshAll();
+  setTimeout(function(){ refreshAll(); }, 600);
   return co;
 }
 
 function onboardingCreate() {
-  var name = document.getElementById('ob-name').value.trim();
-  var desc = document.getElementById('ob-desc').value.trim();
-  var path = document.getElementById('ob-path').value.trim();
-  var agentName = document.getElementById('ob-agent').value.trim();
+  var name = (document.getElementById('ob-name')||{}).value||'';
+  var desc = (document.getElementById('ob-desc')||{}).value||'';
+  var path = (document.getElementById('ob-path')||{}).value||'';
+  name = name.trim(); desc = desc.trim(); path = path.trim();
   if (!name) { toastErr('Company name is required'); return; }
   if (!path) { toastErr('Project folder path is required'); return; }
-  var co = _createCompany(name, desc, path, _currentCompanyLogo);
-  // Create CEO agent with validated provider, not Anthropic default
-  var _agentName = agentName || 'CEO';
-  var _proj = RockoCore.getActiveProject();
-  // Build provider config — handle free proxy specially
-  var _prov;
-  if (_selectedProvider && _selectedProvider.id === 'free_proxy') {
-    var _backend = FREE_PROXY_BACKENDS.find(function(b){ return b.id === _selectedFreeBackend; }) || FREE_PROXY_BACKENDS[0];
-    _prov = {
-      provider_id: 'free_proxy',
-      free_backend: _selectedFreeBackend,
-      free_key: (document.getElementById('ob-proxy-key')||{}).value || window._proxyKeyInput || '',
-      model: _backend.models.sonnet,
-      base_url: 'http://localhost:8082',
-      status: 'free_tier',
-    };
-  } else {
-    _prov = _obProviderConfig || {provider_id:'later', model:'', status:'configure_later'};
-  }
-  var _ceoId = _agentName.toLowerCase().replace(/[^a-z0-9]/g,'_') + '_agent';
-  var _ceoInstructions = '# ' + _agentName + '\n\n'
-    + 'Role: CEO / Strategy Orchestrator\n'
-    + 'Company: ' + name + '\n'
-    + (desc ? 'Mission: ' + desc + '\n' : '')
-    + '\nYou are the CEO of ' + name + '. Orchestrate the agent team, '
-    + 'review pipeline results, and make strategic decisions. '
-    + 'When asked to build a team, respond with a hire_agent decision containing an agents[] array. '
-    + 'Each agent must include: name, role, agent_id, description, instructions, and optional skills.';
-
-  var _ceoAgent = {
-    id:                   _ceoId,
-    name:                 _agentName,
-    display_name:         _agentName,
-    role:                 'ceo',
-    type:                 'prompt',
-    description:          'Company orchestrator and decision maker.',
-    instructions:         _ceoInstructions,
-    _base_instructions:   _ceoInstructions,
-    status:               'active',
-    model_provider:       '__company_default__',
-    model_override:       _prov.model || null,
-    using_company_default: true,
-    provider_status:      _prov.status || 'configure_later',
-    pipeline_step:        _ceoId + '_step',
-    enabled:              true,
-    skills:               [],
-    projectName:          _proj,
-  };
-
-  // Register in RockoCore (project manifest + localStorage)
-  // createAgent(proj, def, instructions) — must pass project name first
-  if (_proj) RockoCore.createAgent(_proj, _ceoAgent, _ceoInstructions);
-
-  // Persist to bridge so CEO survives restart and is tied to the company
-  bridgePost('/agents/create', {
-    agent_id:       _ceoId,
-    id:             _ceoId,
-    name:           _agentName,
-    display_name:   _agentName,
-    role:           'ceo',
-    description:    _ceoAgent.description,
-    instructions:   _ceoInstructions,
-    model_provider: '__company_default__',
-    model_override: _prov.model || null,
-    skills:         [],
-  });
-
+  _createCompany(name, desc, path, _currentCompanyLogo);
   toastOk('Company created: ' + name + ' — CEO ready');
-  // Refresh twice: once now, once after a short delay to catch async writes
-  refreshAll();
-  setTimeout(function(){ refreshAll(); }, 400);
 }
 function onboardingImport() {
   var path = prompt('Enter the path to your project.json:');
@@ -5318,16 +5280,16 @@ function renderTemplateGallery() {
   gallery.innerHTML = '';
   COMPANY_TEMPLATES.forEach(function(tpl) {
     var card = document.createElement('div');
-    card.style.cssText = 'padding:14px;border:1px solid var(--border);cursor:pointer;transition:all .15s;background:var(--bg-card);';
+    card.style.cssText = 'padding:12px 14px;border:1px solid var(--border);cursor:pointer;transition:all .15s;background:var(--bg-card);min-height:118px;display:flex;flex-direction:column;';
     card.innerHTML =
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">' +
         '<span style="font-size:22px;">' + tpl.icon + '</span>' +
         '<div>' +
-          '<div style="font-family:var(--cond);font-size:14px;font-weight:700;letter-spacing:.5px;">' + tpl.name + '</div>' +
+          '<div style="font-family:var(--cond);font-size:14px;font-weight:700;letter-spacing:.5px;line-height:1.15;">' + tpl.name + '</div>' +
           '<span style="font-family:var(--mono);font-size:9px;padding:1px 6px;border:1px solid ' + tpl.tagColor + ';color:' + tpl.tagColor + ';">' + tpl.tag + '</span>' +
         '</div>' +
       '</div>' +
-      '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);line-height:1.6;margin-bottom:8px;">' + tpl.desc + '</div>' +
+      '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);line-height:1.45;margin-bottom:8px;flex:1;">' + tpl.desc + '</div>' +
       '<div style="font-family:var(--mono);font-size:10px;color:var(--text-secondary);">' + (tpl.agents.length + 1) + ' agents incl. CEO</div>';
     card.addEventListener('mouseenter', function(){ card.style.borderColor = 'var(--accent)'; card.style.background = 'rgba(71,130,255,.04)'; });
     card.addEventListener('mouseleave', function(){ card.style.borderColor = 'var(--border)'; card.style.background = 'var(--bg-card)'; });
@@ -5389,54 +5351,33 @@ function openCompanyModal() {
   openModal('companyModal');
 }
 function submitCompanyModal() {
-  // Read from the correct panel depending on which tab is active
   var name, path, desc;
   if (_activeTemplate) {
-    name = (document.getElementById('cm-tpl-name') || {}).value || '';
-    path = (document.getElementById('cm-tpl-path') || {}).value || '';
+    name = (document.getElementById('cm-tpl-name')||{}).value||'';
+    path = (document.getElementById('cm-tpl-path')||{}).value||'';
     desc = _activeTemplate.desc;
   } else {
-    name = (document.getElementById('cm-name') || {}).value || '';
-    path = (document.getElementById('cm-path') || {}).value || '';
-    desc = (document.getElementById('cm-desc') || {}).value || '';
+    name = (document.getElementById('cm-name')||{}).value||'';
+    path = (document.getElementById('cm-path')||{}).value||'';
+    desc = (document.getElementById('cm-desc')||{}).value||'';
   }
   name = name.trim(); path = path.trim(); desc = (desc||'').trim();
   if (!name) { toastErr('Company name is required'); return; }
   if (!path) { toastErr('Project path is required'); return; }
+  // _createCompany always creates CEO atomically — no duplicate needed here
   _createCompany(name, desc, path, _companyModalLogo);
-  var _proj = RockoCore.getActiveProject();
-  var _ceoId = 'ceo_agent';
-  var _ceoInstructions = '# CEO\n\nRole: CEO / Strategy Orchestrator\nCompany: ' + name + '\n'
-    + (desc ? 'Mission: ' + desc + '\n' : '')
-    + '\nYou are the CEO of ' + name + '. Orchestrate the agent team, '
-    + 'review pipeline results, and make strategic decisions. '
-    + 'When asked to build a team, respond with a hire_agent decision containing an agents[] array. '
-    + 'Each agent must include: name, role, agent_id, description, instructions, and optional skills.';
-  var _ceoAgent = {
-    id: _ceoId, name: 'CEO', display_name: 'CEO', role: 'ceo', type: 'prompt',
-    description: 'Company orchestrator and decision maker.',
-    instructions: _ceoInstructions, _base_instructions: _ceoInstructions,
-    status: 'active', model_provider: '__company_default__', model_override: null,
-    using_company_default: true, provider_status: 'configure_later',
-    pipeline_step: _ceoId + '_step', enabled: true, skills: [], projectName: _proj,
-  };
-  if (_proj) RockoCore.createAgent(_proj, _ceoAgent, _ceoInstructions);
-  bridgePost('/agents/create', {
-    agent_id: _ceoId, id: _ceoId, name: 'CEO', display_name: 'CEO', role: 'ceo',
-    description: _ceoAgent.description, instructions: _ceoInstructions,
-    model_provider: '__company_default__', model_override: null, skills: [],
-  });
-  // If a template was selected, create all template agents too
+  // If a template was selected, also create template agents on top of the CEO
   if (_activeTemplate && _activeTemplate.agents && _activeTemplate.agents.length) {
+    var _projName = RockoCore.getActiveProject();
     _activeTemplate.agents.forEach(function(a) {
-      var agentDef = {
+      var def = {
         id: a.id, name: a.name, display_name: a.name, role: a.role, type: 'prompt',
         description: a.desc, instructions: a.instructions, _base_instructions: a.instructions,
         status: 'active', model_provider: '__company_default__', model_override: null,
         using_company_default: true, provider_status: 'configure_later',
-        pipeline_step: a.id + '_step', enabled: true, skills: [], projectName: _proj,
+        pipeline_step: a.id + '_step', enabled: true, skills: [], projectName: _projName,
       };
-      if (_proj) RockoCore.createAgent(_proj, agentDef, a.instructions);
+      if (_projName) RockoCore.createAgent(_projName, def, a.instructions);
       bridgePost('/agents/create', {
         agent_id: a.id, id: a.id, name: a.name, display_name: a.name, role: a.role,
         description: a.desc, instructions: a.instructions,
@@ -5449,7 +5390,7 @@ function submitCompanyModal() {
   }
   _activeTemplate = null;
   refreshAll();
-  setTimeout(function(){ refreshAll(); }, 400);
+  setTimeout(function(){ refreshAll(); }, 600);
 }
 
 // ── Edit / Delete Company ────────────────────────────────────────────────────
@@ -7096,7 +7037,7 @@ fullBoot();
 
 <!-- COMPANY MANAGEMENT MODAL -->
 <div class="modal-overlay" id="companyModal">
-  <div class="modal" style="width:620px;background:var(--bg-panel);border:1px solid var(--border-bright);padding:0;overflow:hidden;">
+  <div class="modal" style="width:min(1080px,calc(100vw - 48px));background:var(--bg-panel);border:1px solid var(--border-bright);padding:0;overflow:hidden;">
 
     <!-- Tab switcher -->
     <div style="display:flex;border-bottom:1px solid var(--border);">
@@ -7137,8 +7078,8 @@ fullBoot();
     <!-- TEMPLATE panel -->
     <div id="cm-template-panel" style="display:none;padding:28px 30px;">
 
-      <!-- Gallery - 4 cols, no scroll -->
-      <div id="cm-template-gallery" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;"></div>
+      <!-- Gallery - wide compact rows, no scroll on normal desktop widths -->
+      <div id="cm-template-gallery" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;"></div>
 
       <!-- Selected confirmation -->
       <div id="cm-template-selected" style="display:none;">
