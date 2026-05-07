@@ -21,6 +21,10 @@
 
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@300;400;600;700&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
+@keyframes agentLoadBar{
+  from{transform:translateX(-100%);}
+  to{transform:translateX(300%);}
+} 
 :root{
   --bg-void:#000;--bg-panel:#0d0d0d;--bg-card:#141414;--bg-hover:#1e1e1e;
   --border:#383838;--border-bright:#5a5a5a;
@@ -1959,18 +1963,34 @@ const RockoCore = (() => {
     throw new Error('Unknown provider: "' + agent.provider + '"');
   }
   async function callAgent(agentId,userMessage,history=[]){
-    const agent=_agents[agentId]; if(!agent){log('error','Agent not found: '+agentId);return null;}
-    agent.status='active'; emit('agentStatusChanged',{agentId,status:'active'});
+    const agent=_agents[agentId];
+    if(!agent){
+      log('error','Agent not found: '+agentId);
+      throw new Error('Agent not found: '+agentId);
+    }
+
+    agent.status='active';
+    emit('agentStatusChanged',{agentId,status:'active'});
     log('system','▶ '+agent.name+' ['+agent.provider+'/'+agent.model+']');
+
     const t0=Date.now();
+
     try{
       const result=await _callProvider(agent,[...history,{role:'user',content:userMessage}]);
-      agent.status='idle'; emit('agentStatusChanged',{agentId,status:'idle'}); saveState();
+
+      agent.status='idle';
+      emit('agentStatusChanged',{agentId,status:'idle'});
+      saveState();
+
       log('success','✓ '+agent.name+' ('+(Date.now()-t0)+'ms, '+(result.usage?.output_tokens||'?')+'t)');
       return{...result,_duration_ms:Date.now()-t0};
     }catch(err){
-      agent.status='error'; emit('agentStatusChanged',{agentId,status:'error'}); saveState();
-      log('error','✕ '+agent.name+': '+err.message); return null;
+      agent.status='idle';
+      emit('agentStatusChanged',{agentId,status:'idle'});
+      saveState();
+
+      log('error','✕ '+agent.name+': '+err.message);
+      throw err;
     }
   }
 
@@ -2588,6 +2608,92 @@ function extractAgentText(result){
   return result.text || result.response || result.output || result.message || '';
 }
 
+function buildAgentRunPrompt(agent,userText){
+  var projectName = agent.project || RockoCore.getActiveProject() || 'Unknown project';
+  var agents = RockoCore.getAgents(projectName) || [];
+  var company = typeof getActiveCompany === 'function' ? getActiveCompany() : null;
+
+  var context = {
+    company: company ? {
+      name: company.display_name || company.id || projectName,
+      description: company.description || '',
+      default_provider: company.default_provider || '',
+      default_model: company.default_model || ''
+    } : {
+      name: projectName,
+      description: '',
+      default_provider: '',
+      default_model: ''
+    },
+    active_agent: {
+      id: agent.id,
+      name: agent.name,
+      role: agent.role,
+      provider: agent.provider,
+      model: agent.model,
+      pipeline_step: agent.pipeline_step
+    },
+    current_agents: agents.map(function(a){
+      return {
+        id:a.id,
+        name:a.name,
+        role:a.role,
+        status:a.status,
+        pipeline_step:a.pipeline_step
+      };
+    })
+  };
+
+  return [
+    'You are responding inside the RockoAgents agent chat UI.',
+    '',
+    'CRITICAL RESPONSE RULES:',
+    '- Do not invent product candidates, scores, spend, ROAS, campaign results, run history, approvals, or budget numbers.',
+    '- Only use facts present in the context below or in the user message.',
+    '- If information is missing, say exactly what is missing.',
+    '- Return a clean human-readable message, not raw JSON, unless the user specifically asks for JSON.',
+    '- Keep the answer useful, direct, and operational.',
+    '',
+    'REQUIRED FORMAT:',
+    'Status:',
+    'Known Facts:',
+    'Missing Information:',
+    'Next Action:',
+    'Needs Approval:',
+    '',
+    'CURRENT ROCKOAGENTS CONTEXT:',
+    JSON.stringify(context,null,2),
+    '',
+    'USER MESSAGE:',
+    userText
+  ].join('\n');
+}
+
+function renderAgentThinking(log,agentName){
+  if(!log)return null;
+
+  var id='agentThinking_'+Date.now();
+
+  log.innerHTML += ''
+    + '<div class="agent-chat-msg agent" id="'+id+'">'
+    + '<b>'+escapeHtml(agentName || 'Agent')+'</b><br>'
+    + '<div style="margin-top:8px;color:var(--text-dim);">Thinking...</div>'
+    + '<div style="height:6px;border:1px solid var(--border);margin-top:10px;overflow:hidden;background:var(--bg-card);">'
+    + '<div style="height:100%;width:35%;background:var(--green);animation:agentLoadBar 1s infinite alternate;"></div>'
+    + '</div>'
+    + '</div>';
+
+  log.scrollTop=log.scrollHeight;
+  return document.getElementById(id);
+}
+
+function setAgentRunButtonsBusy(isBusy){
+  document.querySelectorAll('button[onclick="runAgentNow()"]').forEach(function(btn){
+    btn.disabled=!!isBusy;
+    btn.classList.toggle('btn-loading',!!isBusy);
+  });
+}
+
 async function runAgentNow(){
   if(!currentAgentId)return;
 
@@ -2597,16 +2703,21 @@ async function runAgentNow(){
   var box = document.getElementById('agentChatInput');
   var log = document.getElementById('agentChatLog');
 
-  var msg = box && box.value.trim()
+  var visibleMsg = box && box.value.trim()
     ? box.value.trim()
-    : 'Provide a brief status report of your role.';
+    : 'Give me your current status using only known RockoAgents context.';
+
+  var modelMsg = buildAgentRunPrompt(a,visibleMsg);
 
   if(box)box.value = '';
 
   if(log){
-    log.innerHTML += '<div class="agent-chat-msg user"><b>You</b><br>' + escapeHtml(msg) + '</div>';
+    log.innerHTML += '<div class="agent-chat-msg user"><b>You</b><br>' + escapeHtml(visibleMsg) + '</div>';
     log.scrollTop = log.scrollHeight;
   }
+
+  var thinkingEl = renderAgentThinking(log,a.name || currentAgentId);
+  setAgentRunButtonsBusy(true);
 
   try{
     var t0 = Date.now();
@@ -2614,7 +2725,7 @@ async function runAgentNow(){
     RockoCore.updateAgent(currentAgentId,{status:'active'});
     refreshAll();
 
-    var result = await RockoCore.callAgent(currentAgentId,msg);
+    var result = await RockoCore.callAgent(currentAgentId,modelMsg);
     var text = extractAgentText(result);
 
     if(!text){
@@ -2623,23 +2734,30 @@ async function runAgentNow(){
 
     RockoCore.updateAgent(currentAgentId,{status:'idle'});
 
-    if(log){
+    if(thinkingEl){
+      thinkingEl.outerHTML = '<div class="agent-chat-msg agent"><b>' + escapeHtml(a.name || currentAgentId) + '</b><br>' + escapeHtml(text) + '</div>';
+    }else if(log){
       log.innerHTML += '<div class="agent-chat-msg agent"><b>' + escapeHtml(a.name || currentAgentId) + '</b><br>' + escapeHtml(text) + '</div>';
-      log.scrollTop = log.scrollHeight;
     }
+
+    if(log)log.scrollTop = log.scrollHeight;
 
     taskOk((a.name || 'Agent') + ' responded in ' + (Date.now() - t0) + 'ms');
   }catch(err){
     RockoCore.updateAgent(currentAgentId,{status:'idle'});
 
-    if(log){
+    if(thinkingEl){
+      thinkingEl.outerHTML = '<div class="agent-chat-msg error"><b>Error</b><br>' + escapeHtml(err.message || String(err)) + '</div>';
+    }else if(log){
       log.innerHTML += '<div class="agent-chat-msg error"><b>Error</b><br>' + escapeHtml(err.message || String(err)) + '</div>';
-      log.scrollTop = log.scrollHeight;
     }
+
+    if(log)log.scrollTop = log.scrollHeight;
 
     taskErr('Agent run failed: ' + (err.message || err));
   }
 
+  setAgentRunButtonsBusy(false);
   refreshAll();
 }
 
