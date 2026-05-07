@@ -4097,6 +4097,15 @@ function restoreRockoStateOnBoot(){
     var active = RockoCore.getActiveProject();
 
     if(loaded && active){
+      // Deduplicate any ghost CEOs persisted in localStorage from before this fix
+      if (typeof ensureCompanyCEO === 'function') {
+        var activeCo = typeof getActiveCompany === 'function' ? getActiveCompany() : null;
+        ensureCompanyCEO(
+          active,
+          (activeCo && activeCo.display_name) || active,
+          (activeCo && activeCo.description) || ''
+        );
+      }
       syncCompanyAgentCache(active);
       RockoCore.saveState();
       console.log('Rocko state restored on boot:', active);
