@@ -1884,26 +1884,70 @@ const RockoCore = (() => {
 
   // ── Model Layer ──────────────────────────────────────────────
   async function _callProvider(agent,messages){
+
+    // ── Guard: provider required ─────────────────────────────────────────────
     if(!agent.provider || agent.provider==='__unset__' || agent.provider==='later'){
-      throw new Error('No provider configured. Select Ollama or another provider in company settings.');
+      throw new Error('No provider configured. Select a provider in company settings.');
     }
 
+    // ── Path 1: Local script via bridge ──────────────────────────────────────
+    // Browser cannot spawn processes — local scripts must route through the bridge server.
+    const scriptPath = agent.local_code?.script_path || agent.local_script_path || '';
+    if(scriptPath){
+      if(!_bridgeOk){
+        throw new Error('Local script agent requires the bridge to be online. Start the RockoAgentHub bridge server.');
+      }
+      let res;
+      try{
+        res = await fetch(`${_bridgeUrl}/agent/exec`,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            agent_id: agent.id,
+            script_path: scriptPath,
+            entry_point: agent.local_code?.entry || agent.local_code?.entry_point || '',
+            instructions: agent.instructions || '',
+            messages
+          }),
+          signal: AbortSignal.timeout(120000)
+        });
+      }catch(fetchErr){
+        if(fetchErr.name==='TimeoutError'||fetchErr.name==='AbortError'){
+          throw new Error('Local script timed out after 120 seconds. Script path: ' + scriptPath);
+        }
+        throw new Error('Cannot reach bridge for local script execution: ' + fetchErr.message);
+      }
+      if(!res.ok){
+        const errText = await res.text().catch(()=>'');
+        throw new Error('Bridge exec error ' + res.status + (errText ? ': ' + errText.slice(0,200) : ''));
+      }
+      const data = await res.json();
+      if(data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+      return {
+        content:[{type:'text', text: data.text || data.output || data.result || ''}],
+        usage:{output_tokens: data.usage?.output_tokens || 0}
+      };
+    }
+
+    // ── Guard: model required for all LLM paths ──────────────────────────────
     if(!agent.model){
       throw new Error('No model set for agent "' + (agent.name||agent.id) + '". Set a model override or configure the company default model.');
     }
 
+    // ── Path 2: Anthropic ────────────────────────────────────────────────────
     if(agent.provider==='anthropic'){
-      const apiKey = agent.api_key ||
-        (typeof getActiveCompany === 'function' && getActiveCompany()?.api_key) || '';
+      const co = typeof getActiveCompany === 'function' ? getActiveCompany() : null;
+      const apiKey = agent.api_key || (co && co.api_key) || '';
+      if(!apiKey) throw new Error('Anthropic API key not configured. Add it in company settings.');
 
-      const res = await fetch(`${agent.api_base}/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const res = await fetch(`${agent.api_base}/messages`,{
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
           'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01'
+          'anthropic-version':'2023-06-01'
         },
-        body: JSON.stringify({
+        body:JSON.stringify({
           model: agent.model,
           max_tokens: 1000,
           system: agent.instructions || 'You are a helpful agent.',
@@ -1911,17 +1955,16 @@ const RockoCore = (() => {
         }),
         signal: AbortSignal.timeout(60000)
       });
-
       if(!res.ok){
         const errText = await res.text().catch(()=>'');
         throw new Error('Anthropic API error ' + res.status + (errText ? ': ' + errText.slice(0,200) : ''));
       }
-
       const data = await res.json();
       if(data.error) throw new Error(data.error.message || JSON.stringify(data.error));
       return data;
     }
 
+    // ── Path 3: OpenAI-compatible (Ollama, LMStudio, etc.) ──────────────────
     const openAICompatibleProviders = ['openai_compatible','local','lmstudio','custom','free_proxy','openai','nvidia','gemini'];
 
     if(openAICompatibleProviders.includes(agent.provider)){
@@ -1931,32 +1974,44 @@ const RockoCore = (() => {
         agent.provider === 'free_proxy' ? 'http://localhost:8082/v1'  :
         ''
       );
+      if(!base) throw new Error('Provider "' + agent.provider + '" has no API base URL configured.');
 
-      if(!base){
-        throw new Error('Provider "' + agent.provider + '" has no API base URL configured.');
+      let res;
+      try{
+        res = await fetch(`${base}/chat/completions`,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            model: agent.model,
+            messages:[{role:'system', content:agent.instructions||''},...messages]
+          }),
+          signal: AbortSignal.timeout(120000)
+        });
+      }catch(fetchErr){
+        if(fetchErr.name==='TimeoutError'||fetchErr.name==='AbortError'){
+          throw new Error(
+            agent.provider==='local'
+              ? 'Ollama timed out. Make sure the model is installed: ollama pull ' + agent.model
+              : agent.provider + ' timed out after 120 seconds.'
+          );
+        }
+        throw new Error(
+          agent.provider==='local'
+            ? 'Cannot reach Ollama at ' + base + '. Start it with: ollama serve'
+            : 'Cannot reach ' + agent.provider + ' at ' + base + ': ' + fetchErr.message
+        );
       }
-
-      const res = await fetch(`${base}/chat/completions`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          model: agent.model,
-          messages: [{role:'system', content:agent.instructions||''},...messages]
-        }),
-        signal: AbortSignal.timeout(60000)
-      });
 
       if(!res.ok){
         const errText = await res.text().catch(()=>'');
-        throw new Error(agent.provider.toUpperCase() + ' API error ' + res.status + (errText ? ': ' + errText.slice(0,200) : ''));
+        throw new Error(agent.provider.toUpperCase() + ' error ' + res.status + (errText ? ': ' + errText.slice(0,200) : ''));
       }
-
       const data = await res.json();
       if(data.error) throw new Error(data.error.message || JSON.stringify(data.error));
 
       return {
-        content:[{type:'text', text:data.choices?.[0]?.message?.content || ''}],
-        usage:{output_tokens:data.usage?.completion_tokens || 0}
+        content:[{type:'text', text:data.choices?.[0]?.message?.content||''}],
+        usage:{output_tokens:data.usage?.completion_tokens||0}
       };
     }
 
