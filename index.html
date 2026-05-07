@@ -1884,19 +1884,37 @@ const RockoCore = (() => {
       throw new Error('No provider configured. Select Ollama or another provider in company settings.');
     }
 
+    if(!agent.model){
+      throw new Error('No model set for agent "' + (agent.name||agent.id) + '". Set a model override or configure the company default model.');
+    }
+
     if(agent.provider==='anthropic'){
-      const res=await fetch(`${agent.api_base}/messages`,{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          model:agent.model,
-          max_tokens:1000,
-          system:agent.instructions||'You are a helpful agent.',
+      const apiKey = agent.api_key ||
+        (typeof getActiveCompany === 'function' && getActiveCompany()?.api_key) || '';
+
+      const res = await fetch(`${agent.api_base}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: agent.model,
+          max_tokens: 1000,
+          system: agent.instructions || 'You are a helpful agent.',
           messages
-        })
+        }),
+        signal: AbortSignal.timeout(60000)
       });
-      const data=await res.json();
-      if(data.error)throw new Error(data.error.message);
+
+      if(!res.ok){
+        const errText = await res.text().catch(()=>'');
+        throw new Error('Anthropic API error ' + res.status + (errText ? ': ' + errText.slice(0,200) : ''));
+      }
+
+      const data = await res.json();
+      if(data.error) throw new Error(data.error.message || JSON.stringify(data.error));
       return data;
     }
 
@@ -1904,9 +1922,9 @@ const RockoCore = (() => {
 
     if(openAICompatibleProviders.includes(agent.provider)){
       const base = agent.api_base || (
-        agent.provider === 'local' ? 'http://localhost:11434/v1' :
-        agent.provider === 'lmstudio' ? 'http://localhost:1234/v1' :
-        agent.provider === 'free_proxy' ? 'http://localhost:8082/v1' :
+        agent.provider === 'local'      ? 'http://localhost:11434/v1' :
+        agent.provider === 'lmstudio'   ? 'http://localhost:1234/v1'  :
+        agent.provider === 'free_proxy' ? 'http://localhost:8082/v1'  :
         ''
       );
 
@@ -1914,26 +1932,31 @@ const RockoCore = (() => {
         throw new Error('Provider "' + agent.provider + '" has no API base URL configured.');
       }
 
-      const res=await fetch(`${base}/chat/completions`,{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          model:agent.model,
-          messages:[{role:'system',content:agent.instructions||''},...messages]
-        })
+      const res = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          model: agent.model,
+          messages: [{role:'system', content:agent.instructions||''},...messages]
+        }),
+        signal: AbortSignal.timeout(60000)
       });
 
-      const data=await res.json();
+      if(!res.ok){
+        const errText = await res.text().catch(()=>'');
+        throw new Error(agent.provider.toUpperCase() + ' API error ' + res.status + (errText ? ': ' + errText.slice(0,200) : ''));
+      }
 
-      if(data.error)throw new Error(data.error.message || JSON.stringify(data.error));
+      const data = await res.json();
+      if(data.error) throw new Error(data.error.message || JSON.stringify(data.error));
 
       return {
-        content:[{type:'text',text:data.choices?.[0]?.message?.content || ''}],
+        content:[{type:'text', text:data.choices?.[0]?.message?.content || ''}],
         usage:{output_tokens:data.usage?.completion_tokens || 0}
       };
     }
 
-    throw new Error('Unknown provider: "'+agent.provider+'"');
+    throw new Error('Unknown provider: "' + agent.provider + '"');
   }
   async function callAgent(agentId,userMessage,history=[]){
     const agent=_agents[agentId]; if(!agent){log('error','Agent not found: '+agentId);return null;}
