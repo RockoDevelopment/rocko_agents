@@ -4208,11 +4208,6 @@ function onboardingCreate() {
   var co = _createCompany(name, desc, path, _currentCompanyLogo);
   if (!co) return;
 
-  var projectName = RockoCore.getActiveProject();
-  ensureCompanyCEO(projectName, name, desc);
-  syncCompanyAgentCache(projectName);
-  RockoCore.saveState();
-
   toastOk('Company created: ' + name + ' — CEO ready');
   refreshAll();
 }
