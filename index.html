@@ -2480,6 +2480,14 @@ function taskErr(msg) {
   if (typeof toastErr === 'function') toastErr(msg || 'Error');
   else console.error(msg || 'Error');
 }
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 async function runAgentNow(){
   if(!currentAgentId)return;
 
@@ -2519,11 +2527,11 @@ async function runAgentNow(){
       JSON.stringify(result, null, 2);
 
     if(log){
-      log.innerHTML += '<div class="agent-chat-msg agent"><b>' + escapeHtml(a.name) + '</b><br>' + escapeHtml(text) + '</div>';
+      log.innerHTML += '<div class="agent-chat-msg agent"><b>' + escapeHtml(a.name || currentAgentId) + '</b><br>' + escapeHtml(text) + '</div>';
       log.scrollTop = log.scrollHeight;
     }
 
-    taskOk(a.name + ' responded in ' + (Date.now() - t0) + 'ms');
+    taskOk((a.name || 'Agent') + ' responded in ' + (Date.now() - t0) + 'ms');
   } catch(err) {
     if(log){
       log.innerHTML += '<div class="agent-chat-msg error"><b>Error</b><br>' + escapeHtml(err.message || String(err)) + '</div>';
@@ -3704,22 +3712,38 @@ function renderCompanyRail() {
   });
 }
 
+function isCEOAgent(a) {
+  return !!(a && (
+    a.role === 'ceo' ||
+    a.id === 'ceo' ||
+    a.id === 'ceo_agent' ||
+    String(a.name || '').trim().toLowerCase() === 'ceo' ||
+    String(a.display_name || '').trim().toLowerCase() === 'ceo'
+  ));
+}
+
 function ensureCompanyCEO(projectName, companyName, description) {
   projectName = projectName || RockoCore.getActiveProject();
   if (!projectName) return null;
 
-  var agents = RockoCore.getAgents(projectName) || [];
+  var manifest = RockoCore.getProject(projectName);
+  var liveAgents = RockoCore.getAgents(projectName) || [];
+  var manifestAgents = manifest && Array.isArray(manifest.agents) ? manifest.agents : [];
 
-  var ceos = agents.filter(function(a) {
-    return a && (
-      a.role === 'ceo' ||
-      a.id === 'ceo' ||
-      a.id === 'ceo_agent' ||
-      String(a.name || '').toLowerCase() === 'ceo'
-    );
+  var ceos = [];
+
+  liveAgents.forEach(function(a) {
+    if (isCEOAgent(a)) ceos.push(a);
+  });
+
+  manifestAgents.forEach(function(a) {
+    if (isCEOAgent(a) && !ceos.some(function(x) { return x.id === a.id; })) {
+      ceos.push(a);
+    }
   });
 
   var keeper =
+    ceos.find(function(a) { return a.id === 'ceo_agent'; }) ||
     ceos.find(function(a) { return a.status === 'active'; }) ||
     ceos.find(function(a) { return a.id === 'ceo'; }) ||
     ceos[0];
@@ -3732,7 +3756,7 @@ function ensureCompanyCEO(projectName, companyName, description) {
       + '\nYou are the CEO of ' + (companyName || projectName) + '. Orchestrate the agent team, review pipeline results, build the company agent roster, and make strategic decisions.';
 
     keeper = RockoCore.createAgent(projectName, {
-      id: 'ceo',
+      id: 'ceo_agent',
       name: 'CEO',
       display_name: 'CEO',
       role: 'ceo',
@@ -3747,7 +3771,7 @@ function ensureCompanyCEO(projectName, companyName, description) {
       model_override: null,
       using_company_default: true,
       provider_status: 'configure_later',
-      pipeline_step: 'ceo_step',
+      pipeline_step: 'ceo_agent_step',
       enabled: true,
       project_tools: ['filesystem', 'http'],
       apis: [],
@@ -3755,15 +3779,27 @@ function ensureCompanyCEO(projectName, companyName, description) {
     }, instr);
   }
 
+  keeper.project = projectName;
   keeper.role = 'ceo';
   keeper.name = keeper.name || 'CEO';
   keeper.display_name = keeper.display_name || 'CEO';
   keeper.status = keeper.status || 'active';
-  keeper.pipeline_step = keeper.pipeline_step || 'ceo_step';
+  keeper.pipeline_step = keeper.pipeline_step || (keeper.id === 'ceo' ? 'ceo_step' : 'ceo_agent_step');
 
-  // Delete duplicate CEOs from memory.
   ceos.forEach(function(a) {
-    if (a.id !== keeper.id) delete RockoCore._agents?.[a.id];
+    if (!a || a.id === keeper.id) return;
+
+    try {
+      if (RockoCore._agents && RockoCore._agents[a.id]) {
+        delete RockoCore._agents[a.id];
+      }
+    } catch(e) {}
+
+    if (manifest && Array.isArray(manifest.agents)) {
+      manifest.agents = manifest.agents.filter(function(x) {
+        return x && x.id !== a.id;
+      });
+    }
   });
 
   repairCEOPipeline(projectName, keeper);
@@ -3778,12 +3814,7 @@ function repairCEOPipeline(projectName, ceo) {
   if (!manifest || !ceo) return;
 
   manifest.agents = (manifest.agents || []).filter(function(a) {
-    return !(a && (
-      a.id === 'ceo_agent' ||
-      a.id === 'ceo' ||
-      a.role === 'ceo' ||
-      String(a.name || '').toLowerCase() === 'ceo'
-    ));
+    return a && !isCEOAgent(a);
   });
 
   manifest.agents.unshift({
@@ -3795,8 +3826,9 @@ function repairCEOPipeline(projectName, ceo) {
     instruction_file: ceo.instruction_file || 'agents\\ceo\\AGENT.md',
     model_provider: ceo.model_provider || '__company_default__',
     model_override: ceo.model_override || null,
-    pipeline_step: ceo.pipeline_step || 'ceo_step',
+    pipeline_step: ceo.pipeline_step || 'ceo_agent_step',
     enabled: true,
+    status: ceo.status || 'active',
     project_tools: ceo.project_tools || ['filesystem', 'http'],
     apis: ceo.apis || [],
     local_code: ceo.local_code || null,
@@ -3816,7 +3848,7 @@ function repairCEOPipeline(projectName, ceo) {
   });
 
   manifest.pipeline.execution_order.unshift({
-    step_id: ceo.pipeline_step || 'ceo_step',
+    step_id: ceo.pipeline_step || 'ceo_agent_step',
     label: ceo.name || 'CEO',
     type: 'agent',
     agent_id: ceo.id,
@@ -3827,6 +3859,7 @@ function repairCEOPipeline(projectName, ceo) {
 function syncCompanyAgentCache(projectName) {
   var list = getCompanies();
   var agents = RockoCore.getAgents(projectName) || [];
+  var manifest = RockoCore.getProject(projectName);
 
   list.forEach(function(co) {
     var coProject =
@@ -3843,7 +3876,7 @@ function syncCompanyAgentCache(projectName) {
         };
       });
 
-      co._manifest = RockoCore.getProject(projectName) || co._manifest;
+      co._manifest = manifest || co._manifest;
     }
   });
 
