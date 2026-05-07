@@ -1536,6 +1536,14 @@ const RockoCore = (() => {
   }
   function getLastSaved(){try{return JSON.parse(localStorage.getItem(SK)||'{}').saved_at||null;}catch{return null;}}
 
+  function asList(v) {
+    if (!v) return [];
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'object') return Object.keys(v);
+    if (typeof v === 'string') return v.split(',').map(s => s.trim()).filter(Boolean);
+    return [];
+  }
+
   // ── Validation ───────────────────────────────────────────────
   function validateManifest(manifest){
     const errors=[],warns=[],info=[];
@@ -1555,8 +1563,17 @@ const RockoCore = (() => {
       if(!a.name)errors.push('Agent "'+a.id+'": missing name');
       if(!a.instruction_file)errors.push('Agent "'+a.id+'": missing instruction_file');
       if(!a.pipeline_step)warns.push('Agent "'+a.id+'": no pipeline_step');
-      (a.apis||[]).forEach(api=>{if(!manifest.apis?.[api])warns.push('Agent "'+a.id+'": api "'+api+'" not in registry');});
-      (a.project_tools||[]).forEach(t=>{if(!manifest.tools?.[t])warns.push('Agent "'+a.id+'": tool "'+t+'" not in registry');});
+      asList(a.apis).forEach(api => {
+    if (!manifest.apis?.[api]) {
+        warns.push('Agent "' + a.id + '": api "' + api + '" not in registry');
+      }
+    });
+
+    asList(a.project_tools).forEach(t => {
+      if (!manifest.tools?.[t]) {
+        warns.push('Agent "' + a.id + '": tool "' + t + '" not in registry');
+      }
+    });
     });
     Object.entries(manifest.executors||{}).forEach(([id,ex])=>{
       if(!ex.script_path&&!ex.entry)errors.push('Executor "'+id+'": missing script_path or entry');
@@ -2335,13 +2352,40 @@ function setEditorStatus(val,btn){editorStatus=val;document.querySelectorAll('.s
 function markUnsaved(){document.getElementById('saveHint').textContent='● Unsaved';document.getElementById('saveHint').style.color='var(--yellow)';}
 function saveAgent(){
   if(!currentAgentId)return;
-  RockoCore.updateAgent(currentAgentId,{name:document.getElementById('editorName').value,role:document.getElementById('editorRole').value,
-    model_override:document.getElementById('editorModelOverride').value.trim()||null,description:document.getElementById('editorDesc').value,
-    instructions:document.getElementById('editorInstructions').value,pipeline_step:document.getElementById('editorStep').value,
-    status:editorStatus,connections:editorConns,tags:document.getElementById('editorTags').value.split(',').map(s=>s.trim()).filter(Boolean)});
-  const h=document.getElementById('saveHint');h.textContent='✓ Saved';h.style.color='var(--green)';
-  if (!h) return;
-  refreshAll();setTimeout(()=>{h.textContent='All saved';h.style.color='';},2000);
+
+  const h=document.getElementById('saveHint');
+
+  RockoCore.updateAgent(currentAgentId,{
+    name:document.getElementById('editorName').value,
+    role:document.getElementById('editorRole').value,
+    model_override:document.getElementById('editorModelOverride').value.trim()||null,
+    description:document.getElementById('editorDesc').value,
+    instructions:document.getElementById('editorInstructions').value,
+    pipeline_step:document.getElementById('editorStep').value,
+    status:editorStatus,
+    connections:editorConns,
+    tags:document.getElementById('editorTags').value
+      .split(',')
+      .map(s=>s.trim())
+      .filter(Boolean),
+
+    apis:[],
+    project_tools:['filesystem','http']
+  });
+
+  if(h){
+    h.textContent='✓ Saved';
+    h.style.color='var(--green)';
+  }
+
+  refreshAll();
+
+  setTimeout(()=>{
+    if(h){
+      h.textContent='All saved';
+      h.style.color='';
+    }
+  },2000);
 }
 function deleteCurrentAgent(){const a=RockoCore.getAgent(currentAgentId);if(!a||!confirm('Delete "'+a.name+'"?'))return;RockoCore.deleteAgent(currentAgentId);currentAgentId=null;}
 function confirmDelete(id){const a=RockoCore.getAgent(id);if(!a||!confirm('Delete "'+a.name+'"?'))return;RockoCore.deleteAgent(id);if(currentAgentId===id)currentAgentId=null;}
