@@ -1927,11 +1927,42 @@ const RockoCore = (() => {
     saveState(); emit('agentUpdated',{agent:_agents[id]}); return true;
   }
   function deleteAgent(id){
-    const a=_agents[id]; if(!a)return false;
-    delete _agents[id];
-    const m=_projects[a.project]; if(m)m.agents=(m.agents||[]).filter(x=>x.id!==id);
-    saveState(); log('warn','Agent deleted: '+a.name); emit('agentDeleted',{agentId:id}); return true;
+  const a = _agents[id];
+  if(!a) return false;
+
+  const projectName = a.project;
+  const wasCEO = a.role === 'ceo' || id === 'ceo' || id === 'ceo_agent';
+
+  delete _agents[id];
+
+  const m = _projects[projectName];
+  if(m){
+    m.agents = (m.agents || []).filter(x => x.id !== id);
+
+    if(m.pipeline && Array.isArray(m.pipeline.execution_order)){
+      m.pipeline.execution_order = m.pipeline.execution_order.filter(step => {
+        return !(step && step.type === 'agent' && step.agent_id === id);
+      });
+    }
   }
+
+  if(wasCEO){
+    const remainingCEO = Object.values(_agents).find(x =>
+      x && x.project === projectName && (x.role === 'ceo' || x.id === 'ceo' || x.id === 'ceo_agent')
+    );
+
+    if(remainingCEO){
+      repairCEOPipeline(projectName, remainingCEO);
+    }else{
+      ensureCompanyCEO(projectName, projectName, '');
+    }
+  }
+
+  saveState();
+  log('warn','Agent deleted: '+a.name);
+  emit('agentDeleted',{agentId:id});
+  return true;
+}
 
   function exportProject(proj){
     const manifest=_projects[proj]; if(!manifest)return null;
@@ -3514,14 +3545,61 @@ function renderCompanyRail() {
 }
 
 
+function repairCEOPipeline(projectName, ceo) {
+  var manifest = RockoCore.getProject(projectName);
+  if (!manifest || !ceo) return;
+
+  manifest.pipeline = manifest.pipeline || {};
+  manifest.pipeline.execution_order = manifest.pipeline.execution_order || [];
+
+  // Remove stale CEO pipeline steps that point to deleted CEO ids.
+  manifest.pipeline.execution_order = manifest.pipeline.execution_order.filter(function(step) {
+    if (!step) return false;
+    if (step.type !== 'agent') return true;
+    if (step.step_id === 'ceo_step' || step.step_id === 'ceo_agent_step') return false;
+    if (step.agent_id === 'ceo' || step.agent_id === 'ceo_agent') return false;
+    return true;
+  });
+
+  // Add one valid CEO step pointing to the real existing CEO.
+  manifest.pipeline.execution_order.unshift({
+    step_id: ceo.pipeline_step || 'ceo_agent_step',
+    label: ceo.name || 'CEO',
+    type: 'agent',
+    agent_id: ceo.id,
+    requires_approval: true
+  });
+
+  ceo.pipeline_step = ceo.pipeline_step || 'ceo_agent_step';
+
+  RockoCore.saveState();
+}
+
 function ensureCompanyCEO(projectName, companyName, description) {
   projectName = projectName || RockoCore.getActiveProject();
   if (!projectName) return null;
 
-  var existing = RockoCore.getAgents(projectName).find(function(a) {
-    return a && (a.role === 'ceo' || a.id === 'ceo_agent');
+  var agents = RockoCore.getAgents(projectName) || [];
+
+  var ceos = agents.filter(function(a) {
+    return a && (a.role === 'ceo' || a.id === 'ceo' || a.id === 'ceo_agent');
   });
-  if (existing) return existing;
+
+  var existing =
+    ceos.find(function(a) { return a.status === 'active'; }) ||
+    ceos.find(function(a) { return a.id === 'ceo_agent'; }) ||
+    ceos[0];
+
+  if (existing) {
+    existing.role = 'ceo';
+    existing.name = existing.name || 'CEO';
+    existing.display_name = existing.display_name || 'CEO';
+    existing.status = existing.status || 'active';
+    existing.pipeline_step = existing.pipeline_step || 'ceo_agent_step';
+
+    repairCEOPipeline(projectName, existing);
+    return existing;
+  }
 
   var instr = '# CEO\n\n'
     + 'Role: CEO / Strategy Orchestrator\n'
@@ -3552,12 +3630,7 @@ function ensureCompanyCEO(projectName, companyName, description) {
     skills: []
   }, instr);
 
-  if (created) {
-    RockoCore.saveState();
-    try { RockoCore.log('success', 'CEO auto-created for company: ' + projectName); } catch(e) {}
-  } else {
-    try { toastErr('CEO auto-create failed for ' + projectName); } catch(e) {}
-  }
+  if (created) repairCEOPipeline(projectName, created);
   return created;
 }
 
