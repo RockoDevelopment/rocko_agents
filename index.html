@@ -3544,37 +3544,6 @@ function renderCompanyRail() {
   });
 }
 
-
-function repairCEOPipeline(projectName, ceo) {
-  var manifest = RockoCore.getProject(projectName);
-  if (!manifest || !ceo) return;
-
-  manifest.pipeline = manifest.pipeline || {};
-  manifest.pipeline.execution_order = manifest.pipeline.execution_order || [];
-
-  // Remove stale CEO pipeline steps that point to deleted CEO ids.
-  manifest.pipeline.execution_order = manifest.pipeline.execution_order.filter(function(step) {
-    if (!step) return false;
-    if (step.type !== 'agent') return true;
-    if (step.step_id === 'ceo_step' || step.step_id === 'ceo_agent_step') return false;
-    if (step.agent_id === 'ceo' || step.agent_id === 'ceo_agent') return false;
-    return true;
-  });
-
-  // Add one valid CEO step pointing to the real existing CEO.
-  manifest.pipeline.execution_order.unshift({
-    step_id: ceo.pipeline_step || 'ceo_agent_step',
-    label: ceo.name || 'CEO',
-    type: 'agent',
-    agent_id: ceo.id,
-    requires_approval: true
-  });
-
-  ceo.pipeline_step = ceo.pipeline_step || 'ceo_agent_step';
-
-  RockoCore.saveState();
-}
-
 function ensureCompanyCEO(projectName, companyName, description) {
   projectName = projectName || RockoCore.getActiveProject();
   if (!projectName) return null;
@@ -3582,56 +3551,143 @@ function ensureCompanyCEO(projectName, companyName, description) {
   var agents = RockoCore.getAgents(projectName) || [];
 
   var ceos = agents.filter(function(a) {
-    return a && (a.role === 'ceo' || a.id === 'ceo' || a.id === 'ceo_agent');
+    return a && (
+      a.role === 'ceo' ||
+      a.id === 'ceo' ||
+      a.id === 'ceo_agent' ||
+      String(a.name || '').toLowerCase() === 'ceo'
+    );
   });
 
-  var existing =
+  var keeper =
     ceos.find(function(a) { return a.status === 'active'; }) ||
-    ceos.find(function(a) { return a.id === 'ceo_agent'; }) ||
+    ceos.find(function(a) { return a.id === 'ceo'; }) ||
     ceos[0];
 
-  if (existing) {
-    existing.role = 'ceo';
-    existing.name = existing.name || 'CEO';
-    existing.display_name = existing.display_name || 'CEO';
-    existing.status = existing.status || 'active';
-    existing.pipeline_step = existing.pipeline_step || 'ceo_agent_step';
+  if (!keeper) {
+    var instr = '# CEO\n\n'
+      + 'Role: CEO / Strategy Orchestrator\n'
+      + 'Company: ' + (companyName || projectName) + '\n'
+      + (description ? 'Mission: ' + description + '\n' : '')
+      + '\nYou are the CEO of ' + (companyName || projectName) + '. Orchestrate the agent team, review pipeline results, build the company agent roster, and make strategic decisions.';
 
-    repairCEOPipeline(projectName, existing);
-    return existing;
+    keeper = RockoCore.createAgent(projectName, {
+      id: 'ceo',
+      name: 'CEO',
+      display_name: 'CEO',
+      role: 'ceo',
+      type: 'prompt',
+      description: 'Company orchestrator and decision maker.',
+      instruction_file: 'agents\\ceo\\AGENT.md',
+      instructions: instr,
+      _instructions: instr,
+      _base_instructions: instr,
+      status: 'active',
+      model_provider: '__company_default__',
+      model_override: null,
+      using_company_default: true,
+      provider_status: 'configure_later',
+      pipeline_step: 'ceo_step',
+      enabled: true,
+      project_tools: ['filesystem', 'http'],
+      apis: [],
+      skills: []
+    }, instr);
   }
 
-  var instr = '# CEO\n\n'
-    + 'Role: CEO / Strategy Orchestrator\n'
-    + 'Company: ' + (companyName || projectName) + '\n'
-    + (description ? 'Mission: ' + description + '\n' : '')
-    + '\nYou are the CEO of ' + (companyName || projectName) + '. Orchestrate the agent team, review pipeline results, build the company agent roster, and make strategic decisions.';
+  keeper.role = 'ceo';
+  keeper.name = keeper.name || 'CEO';
+  keeper.display_name = keeper.display_name || 'CEO';
+  keeper.status = keeper.status || 'active';
+  keeper.pipeline_step = keeper.pipeline_step || 'ceo_step';
 
-  var created = RockoCore.createAgent(projectName, {
-    id: 'ceo_agent',
-    name: 'CEO',
-    display_name: 'CEO',
+  // Delete duplicate CEOs from memory.
+  ceos.forEach(function(a) {
+    if (a.id !== keeper.id) delete RockoCore._agents?.[a.id];
+  });
+
+  repairCEOPipeline(projectName, keeper);
+  syncCompanyAgentCache(projectName);
+  RockoCore.saveState();
+
+  return keeper;
+}
+
+function repairCEOPipeline(projectName, ceo) {
+  var manifest = RockoCore.getProject(projectName);
+  if (!manifest || !ceo) return;
+
+  manifest.agents = (manifest.agents || []).filter(function(a) {
+    return !(a && (
+      a.id === 'ceo_agent' ||
+      a.id === 'ceo' ||
+      a.role === 'ceo' ||
+      String(a.name || '').toLowerCase() === 'ceo'
+    ));
+  });
+
+  manifest.agents.unshift({
+    id: ceo.id,
+    name: ceo.name || 'CEO',
+    display_name: ceo.display_name || 'CEO',
     role: 'ceo',
-    type: 'prompt',
-    description: 'Company orchestrator and decision maker.',
-    instruction_file: 'agents\\ceo\\AGENT.md',
-    instructions: instr,
-    _instructions: instr,
-    _base_instructions: instr,
-    status: 'active',
-    model_provider: '__company_default__',
-    model_override: null,
-    using_company_default: true,
-    provider_status: 'configure_later',
-    pipeline_step: 'ceo_agent_step',
+    type: ceo.type || 'prompt',
+    instruction_file: ceo.instruction_file || 'agents\\ceo\\AGENT.md',
+    model_provider: ceo.model_provider || '__company_default__',
+    model_override: ceo.model_override || null,
+    pipeline_step: ceo.pipeline_step || 'ceo_step',
     enabled: true,
-    project_tools: ['filesystem', 'http'],
-    apis: [],
-    skills: []
-  }, instr);
+    project_tools: ceo.project_tools || ['filesystem', 'http'],
+    apis: ceo.apis || [],
+    local_code: ceo.local_code || null,
+    description: ceo.description || 'Company orchestrator and decision maker.',
+    _instructions: ceo.instructions || ceo._instructions || ''
+  });
 
-  if (created) repairCEOPipeline(projectName, created);
-  return created;
+  manifest.pipeline = manifest.pipeline || {};
+  manifest.pipeline.execution_order = manifest.pipeline.execution_order || [];
+
+  manifest.pipeline.execution_order = manifest.pipeline.execution_order.filter(function(step) {
+    if (!step) return false;
+    if (step.type !== 'agent') return true;
+    if (step.agent_id === 'ceo' || step.agent_id === 'ceo_agent') return false;
+    if (step.step_id === 'ceo_step' || step.step_id === 'ceo_agent_step') return false;
+    return true;
+  });
+
+  manifest.pipeline.execution_order.unshift({
+    step_id: ceo.pipeline_step || 'ceo_step',
+    label: ceo.name || 'CEO',
+    type: 'agent',
+    agent_id: ceo.id,
+    requires_approval: true
+  });
+}
+
+function syncCompanyAgentCache(projectName) {
+  var list = getCompanies();
+  var agents = RockoCore.getAgents(projectName) || [];
+
+  list.forEach(function(co) {
+    var coProject =
+      (co._manifest && co._manifest.project && co._manifest.project.name) ||
+      (co.display_name || co.id || '').replace(/\s+/g, '_');
+
+    if (coProject === projectName) {
+      co.agents = agents.map(function(a) {
+        return {
+          id: a.id,
+          name: a.name,
+          role: a.role,
+          status: a.status
+        };
+      });
+
+      co._manifest = RockoCore.getProject(projectName) || co._manifest;
+    }
+  });
+
+  saveCompanies(list);
 }
 
 async function persistCompanyCreation(projectName, companyRecord) {
@@ -5250,23 +5306,56 @@ function showOnboardingCreate() {
   var pp2=document.getElementById('onboardingPickerPanel'); if(pp2)pp2.style.display='none';
   var cp2=document.getElementById('onboardingCreatePanel'); if(cp2)cp2.style.display='';
 }
+function getCompanyAgentCount(co) {
+  if (!co) return 0;
+
+  var projectName =
+    (co._manifest && co._manifest.project && co._manifest.project.name) ||
+    (co.display_name || co.id || '').replace(/\s+/g, '_');
+
+  var liveAgents = [];
+  try {
+    liveAgents = RockoCore.getAgents(projectName) || [];
+  } catch {
+    liveAgents = [];
+  }
+
+  var manifestAgents =
+    co._manifest && Array.isArray(co._manifest.agents)
+      ? co._manifest.agents
+      : [];
+
+  var companyAgents = Array.isArray(co.agents) ? co.agents : [];
+
+  return Math.max(liveAgents.length, manifestAgents.length, companyAgents.length);
+}
 function renderOnboardingCompanyCards() {
   var el = document.getElementById('onboardingCompanyCards');
   if (!el) return;
+
   el.innerHTML = '';
+
   getCompanies().forEach(function(co) {
     var card = document.createElement('div');
     card.className = 'ob-company-card';
+
     var logoHtml = co.logo
       ? '<img src="' + co.logo + '" class="ob-company-logo" style="width:72px;height:72px;border-radius:12px;object-fit:cover;" alt="">'
-      : '<div class="ob-company-logo">' + (co.display_name||co.id).charAt(0).toUpperCase() + '</div>';
-    var agents = (co.agents||[]).length;
-    var metaStr = agents > 0 ? agents + ' agent' + (agents===1?'':'s') : 'no agents yet';
+      : '<div class="ob-company-logo">' + (co.display_name || co.id).charAt(0).toUpperCase() + '</div>';
+
+    var agents = getCompanyAgentCount(co);
+    var metaStr = agents > 0 ? agents + ' agent' + (agents === 1 ? '' : 's') : 'no agents yet';
+
     card.innerHTML = logoHtml +
-      '<div class="ob-company-name">' + (co.display_name||co.id) + '</div>' +
+      '<div class="ob-company-name">' + (co.display_name || co.id) + '</div>' +
       (co.description ? '<div class="ob-company-desc">' + co.description.slice(0,80) + '</div>' : '') +
       '<div class="ob-company-meta">' + metaStr + '</div>';
-    card.addEventListener('click', function() { setActiveCompany(co.id); hideOnboarding(); });
+
+    card.addEventListener('click', function() {
+      setActiveCompany(co.id);
+      hideOnboarding();
+    });
+
     el.appendChild(card);
   });
 }
