@@ -3874,15 +3874,13 @@ function ensureCompanyCEO(projectName, companyName, description){
   keeper.pipeline_step = 'ceo_agent_step';
   keeper.project = projectName;
 
-  if(RockoCore._agents){
-    Object.keys(RockoCore._agents).forEach(function(id){
-      var a = RockoCore._agents[id];
-      if(a && a.project === projectName && isCEOAgent(a) && id !== keeper.id){
-        delete RockoCore._agents[id];
-      }
-    });
-    RockoCore._agents[keeper.id] = keeper;
-  }
+  // Use the public deleteAgent API — RockoCore._agents is private and inaccessible from outside the IIFE
+  ceos.forEach(function(a){
+    if(a.id !== keeper.id){
+      RockoCore.deleteAgent(a.id);
+    }
+  });
+  RockoCore.updateAgent(keeper.id, keeper);
 
   if(manifest){
     manifest.agents = (manifest.agents || []).filter(function(a){
@@ -3901,7 +3899,7 @@ function ensureCompanyCEO(projectName, companyName, description){
       model_override:keeper.model_override || null,
       pipeline_step:'ceo_agent_step',
       enabled:true,
-      status:keeper.status || 'idle',
+      status:keeper.status || 'active',
       project_tools:keeper.project_tools || ['filesystem','http'],
       apis:keeper.apis || [],
       skills:keeper.skills || [],
