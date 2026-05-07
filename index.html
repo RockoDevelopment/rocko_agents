@@ -2441,9 +2441,10 @@ function openAgent(id){
   const a=RockoCore.getAgent(id); if(!a)return;
   currentAgentId=id; editorStatus=a.status; editorConns=[...(a.connections||[])];
   const manifest=RockoCore.getProject(a.project);
+  const _co = typeof getActiveCompany === 'function' ? getActiveCompany() : null;
   document.getElementById('editorName').value=a.name;
   document.getElementById('editorRole').value=a.role;
-  document.getElementById('editorModel').value=manifest?.model?.default_model||a.model;
+  document.getElementById('editorModel').value=(_co&&_co.default_model)||manifest?.model?.default_model||a.model||'';
   document.getElementById('editorModelOverride').value=a.model_override||'';
   document.getElementById('editorDesc').value=a.description;
   document.getElementById('editorInstructions').value=a.instructions;
@@ -4257,12 +4258,15 @@ function _createCompany(displayName, description, path, logo){
   persistCompanyCreation(proj.project.name, co);
 
   bridgePost('/companies',{
-    id:co.id,
-    display_name:co.display_name,
-    description:co.description,
-    project_path:co.project_path,
-    logo_path:'',
-    active:true
+      id:co.id,
+      display_name:co.display_name,
+      description:co.description,
+      project_path:co.project_path,
+      logo_path:'',
+      active:true,
+      default_provider:co.default_provider || '',
+      default_model:co.default_model || '',
+      base_url:co.base_url || ''
   });
 
   renderCompanyRail();
@@ -5066,10 +5070,21 @@ async function bootCompanyLayer() {
       return co;
     });
     // Cache to localStorage (without _manifest)
-    var lean = bridgeCompanies.map(function(c){
-      var copy = Object.assign({}, c); delete copy._manifest; return copy;
+    var localList = getCompanies();
+    var merged = bridgeCompanies.map(function(c) {
+        var local = localList.find(function(l){ return l.id === c.id; });
+        var copy = Object.assign({}, c);
+        if (local) {
+            if (local._manifest)        copy._manifest        = local._manifest;
+            if (local.default_provider) copy.default_provider = local.default_provider;
+            if (local.default_model)    copy.default_model    = local.default_model;
+            if (local.base_url)         copy.base_url         = local.base_url;
+            if (local.logo)             copy.logo             = local.logo;
+        }
+        return copy;
     });
-    try { localStorage.setItem(COMPANIES_KEY, JSON.stringify(lean)); } catch(e) {}
+    try { localStorage.setItem(COMPANIES_KEY, JSON.stringify(merged.map(function(c){ var x = Object.assign({},c); delete x._manifest; return x; }))); } catch(e) {}
+    _companiesCache = merged;
     // Always show onboarding — returning users see picker, new users see create form
     renderCompanyRail();
     showOnboarding();
