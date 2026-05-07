@@ -4635,15 +4635,13 @@ async function deleteCompany(id) {
   var co = list.find(function(c){ return c.id === id; });
   if (!co) return;
 
-  if (!confirm('Delete "' + (co.display_name || co.id) + '" permanently?\n\nThis removes the company, its cached agents, and its saved project state from RockoAgentHub.')) return;
+  if (!confirm('Delete "' + (co.display_name || co.id) + '" permanently?\n\nThis removes the company, its agents, project state, tasks, and run history from all memory.')) return;
 
   var projectName =
     (co._manifest && co._manifest.project && co._manifest.project.name) ||
     (co.display_name || co.id || '').replace(/\s+/g, '_');
 
-  var newList = list.filter(function(c){ return c.id !== id; });
-  newList.forEach(function(c, i){ c.active = i === 0; });
-
+  // ── 1. Remove from in-memory agent store ────────────────────────────────
   if (projectName && RockoCore._agents) {
     Object.keys(RockoCore._agents).forEach(function(agentId){
       var a = RockoCore._agents[agentId];
@@ -4651,31 +4649,72 @@ async function deleteCompany(id) {
     });
   }
 
+  // ── 2. Remove from in-memory project store ──────────────────────────────
   if (projectName && RockoCore._projects && RockoCore._projects[projectName]) {
     delete RockoCore._projects[projectName];
   }
 
-  if (RockoCore.getActiveProject && RockoCore.getActiveProject() === projectName) {
-    RockoCore.setActiveProject(newList[0] && newList[0]._manifest && newList[0]._manifest.project ? newList[0]._manifest.project.name : null);
+  // ── 3. Clear tasks belonging to this project ────────────────────────────
+  if (projectName && RockoCore._tasks) {
+    Object.keys(RockoCore._tasks).forEach(function(taskId){
+      var t = RockoCore._tasks[taskId];
+      if (t && t.project === projectName) delete RockoCore._tasks[taskId];
+    });
   }
 
+  // ── 4. Clear run history belonging to this project ──────────────────────
+  if (projectName && RockoCore._runHistory) {
+    RockoCore._runHistory = RockoCore._runHistory.filter(function(r){
+      return r && r.project !== projectName;
+    });
+  }
+
+  // ── 5. Clear active project pointer if it was this one ──────────────────
+  if (RockoCore._active === projectName) {
+    RockoCore._active = null;
+  }
+
+  // ── 6. Remove from companies list and update localStorage ───────────────
+  var newList = list.filter(function(c){ return c.id !== id; });
+  newList.forEach(function(c, i){ c.active = i === 0; });
+
+  if (newList.length === 0) {
+    localStorage.removeItem(COMPANIES_KEY);
+    _companiesCache = [];
+  } else {
+    saveCompanies(newList);
+  }
+
+  // ── 7. Remove from PGlite ────────────────────────────────────────────────
   if (_pgReady && _pgdb) {
     try { await _pgDeleteCompany(id); } catch(e) {}
   }
 
-  saveCompanies(newList);
+  // ── 8. Remove from bridge — this is what prevents it coming back on login ─
+  try { await bridgeDelete('/companies/' + id); } catch(e) {}
+
+  // ── 9. Push the cleaned company list to bridge key-value store ──────────
+  try { await bridgePost('/data/save', { key: 'companies', data: newList }); } catch(e) {}
+
+  // ── 10. Persist clean state — no orphaned agents, tasks, or history ──────
   RockoCore.saveState();
 
+  // ── 11. Activate next company or return to onboarding ───────────────────
   if (newList.length) {
     var next = newList[0];
+    var nextProjectName =
+      (next._manifest && next._manifest.project && next._manifest.project.name) ||
+      (next.display_name || next.id || '').replace(/\s+/g, '_');
+
     if (next._manifest) {
       RockoCore.loadProject(next._manifest);
-      RockoCore.setActiveProject(next._manifest.project ? next._manifest.project.name : next.id);
+      RockoCore.setActiveProject(next._manifest.project ? next._manifest.project.name : nextProjectName);
+    } else if (RockoCore._projects && RockoCore._projects[nextProjectName]) {
+      RockoCore.setActiveProject(nextProjectName);
     }
+
     updateTopbarCompany(next);
   } else {
-    localStorage.removeItem(COMPANIES_KEY);
-    _companiesCache = [];
     showOnboarding();
   }
 
