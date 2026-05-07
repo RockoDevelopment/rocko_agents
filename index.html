@@ -185,6 +185,84 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 .meta-val.accent{color:var(--accent);} .meta-val.green{color:var(--green);}
 .save-bar{padding:12px 24px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;background:var(--bg-panel);flex-shrink:0;}
 .save-hint{font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-left:auto;}
+/* CHAT */
+.editor-sidebar{
+  width:320px;
+  border-left:1px solid var(--border);
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  padding:12px;
+}
+
+.meta-block{
+  border:1px solid var(--border);
+  background:var(--bg-panel);
+  padding:10px;
+}
+
+.meta-title{
+  font-family:var(--mono);
+  font-size:10px;
+  margin-bottom:8px;
+  color:var(--text-dim);
+}
+
+/* PASTE THE NEW CHAT CSS RIGHT HERE */
+
+.agent-chat-log{
+  flex:1;
+  min-height:220px;
+  max-height:420px;
+  overflow-y:auto;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  padding:10px;
+  font-family:var(--mono);
+  font-size:11px;
+  line-height:1.6;
+  color:var(--text-secondary);
+}
+
+.agent-chat-msg{
+  border-bottom:1px solid var(--border);
+  padding:8px 0;
+  white-space:pre-wrap;
+}
+
+.agent-chat-msg:last-child{
+  border-bottom:none;
+}
+
+.agent-chat-msg.user b{
+  color:var(--accent);
+}
+
+.agent-chat-msg.agent b{
+  color:var(--green);
+}
+
+.agent-chat-msg.error{
+  color:var(--red);
+}
+
+.agent-chat-input{
+  width:100%;
+  min-height:90px;
+  resize:vertical;
+  margin-top:8px;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  color:var(--text-primary);
+  padding:10px;
+  font-family:var(--mono);
+  font-size:11px;
+  outline:none;
+}
+
+.agent-chat-input:focus{
+  border-color:var(--accent);
+}
 /* PIPELINE VIEW */
 .pipeline-header{padding:16px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px;background:var(--bg-panel);flex-shrink:0;}
 .pipeline-title{font-family:var(--cond);font-size:18px;font-weight:700;letter-spacing:2px;color:var(--accent);text-transform:uppercase;}
@@ -905,14 +983,17 @@ body { display:flex; flex-direction:row; overflow:hidden; }
             <div class="meta-row"><span class="meta-key">Provider</span><span class="meta-val" id="metaProvider">—</span></div>
             <div class="meta-row"><span class="meta-key">Type</span><span class="meta-val" id="metaType">—</span></div>
           </div>
+
           <div class="meta-block">
             <div class="meta-title">Permitted Tools</div>
             <div id="toolsList" style="font-family:var(--mono);font-size:10px;display:flex;flex-wrap:wrap;gap:4px;"></div>
           </div>
+
           <div class="meta-block">
             <div class="meta-title">Permitted APIs</div>
             <div id="apisList" style="font-family:var(--mono);font-size:10px;display:flex;flex-wrap:wrap;gap:4px;"></div>
           </div>
+
           <div class="meta-block">
             <div class="meta-title">Actions</div>
             <div style="display:flex;flex-direction:column;gap:6px;">
@@ -922,14 +1003,21 @@ body { display:flex; flex-direction:row; overflow:hidden; }
               <button class="btn btn-danger" style="width:100%;padding:7px" onclick="deleteCurrentAgent()">✕ Delete</button>
             </div>
           </div>
+
+          <div class="meta-block" style="flex:1;min-height:320px;">
+            <div class="meta-title">Agent Chat</div>
+            <div id="agentChatLog" class="agent-chat-log"></div>
+            <textarea id="agentChatInput" class="agent-chat-input" placeholder="Talk to this agent..."></textarea>
+            <button class="btn btn-success" onclick="runAgentNow()" style="width:100%;margin-top:8px;padding:7px;">▶ Send Message</button>
+          </div>
         </div>
-      </div>
-      <div class="save-bar">
-        <button class="btn btn-primary" onclick="saveAgent()">Save Agent</button>
-        <button class="btn btn-ghost" onclick="setTab('dashboard',null)">Cancel</button>
-        <span class="save-hint" id="saveHint">No changes</span>
-      </div>
-    </div>
+        </div>
+        <div class="save-bar">
+          <button class="btn btn-primary" onclick="saveAgent()">Save Agent</button>
+          <button class="btn btn-ghost" onclick="setTab('dashboard',null)">Cancel</button>
+          <span class="save-hint" id="saveHint">No changes</span>
+        </div>
+        </div>
 
     <!-- PIPELINE -->
     <div class="view" id="view-pipeline">
@@ -2403,19 +2491,67 @@ function createTaskFromAgent(){
   document.getElementById('taskDesc').value='';
   openModal('createTaskModal');
 }
+function taskOk(msg) {
+  if (typeof toastOk === 'function') toastOk(msg || 'Done');
+  else console.log(msg || 'Done');
+}
+
+function taskErr(msg) {
+  if (typeof toastErr === 'function') toastErr(msg || 'Error');
+  else console.error(msg || 'Error');
+}
 async function runAgentNow(){
   if(!currentAgentId)return;
-  const a=RockoCore.getAgent(currentAgentId);
-  const msg=prompt('Message to '+a.name+':','Provide a brief status report of your role.');
-  if(!msg)return;
-  const t0=Date.now(),result=await RockoCore.callAgent(currentAgentId,msg);
-  if(result){
-    const text=result.content?.find(b=>b.type==='text')?.text||JSON.stringify(result);
-    document.getElementById('responseTitle').innerHTML=a.name+' <button class="modal-close" onclick="closeModal(\'responseModal\')">✕</button>';
-    document.getElementById('responseBody').textContent=text;
-    document.getElementById('responseMeta').textContent=a.model+' · '+(Date.now()-t0)+'ms · '+(result.usage?.output_tokens||'?')+' tokens';
-    openModal('responseModal');
+
+  const a = RockoCore.getAgent(currentAgentId);
+  if(!a)return;
+
+  const box = document.getElementById('agentChatInput');
+  const log = document.getElementById('agentChatLog');
+
+  const msg = box && box.value.trim()
+    ? box.value.trim()
+    : 'Provide a brief status report of your role.';
+
+  if(box) box.value = '';
+
+  if(log){
+    log.innerHTML += '<div class="agent-chat-msg user"><b>You</b><br>' + escapeHtml(msg) + '</div>';
+    log.scrollTop = log.scrollHeight;
   }
+
+  try {
+    const t0 = Date.now();
+
+    const result = await bridgePost('/agents/run', {
+      agent_id: currentAgentId,
+      id: currentAgentId,
+      project: a.project,
+      message: msg,
+      input: msg
+    });
+
+    const text =
+      result?.content?.find?.(b => b.type === 'text')?.text ||
+      result?.text ||
+      result?.response ||
+      result?.output ||
+      JSON.stringify(result, null, 2);
+
+    if(log){
+      log.innerHTML += '<div class="agent-chat-msg agent"><b>' + escapeHtml(a.name) + '</b><br>' + escapeHtml(text) + '</div>';
+      log.scrollTop = log.scrollHeight;
+    }
+
+    taskOk(a.name + ' responded in ' + (Date.now() - t0) + 'ms');
+  } catch(err) {
+    if(log){
+      log.innerHTML += '<div class="agent-chat-msg error"><b>Error</b><br>' + escapeHtml(err.message || String(err)) + '</div>';
+      log.scrollTop = log.scrollHeight;
+    }
+    taskErr('Agent run failed: ' + (err.message || err));
+  }
+
   refreshAll();
 }
 async function runAgentCard(id){const a=RockoCore.getAgent(id);if(!a)return;if(a.status==='active'){RockoCore.updateAgent(id,{status:'idle'});refreshAll();return;}openAgent(id);setTimeout(()=>runAgentNow(),100);}
