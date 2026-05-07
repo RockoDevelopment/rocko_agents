@@ -742,14 +742,22 @@ body { display:flex; flex-direction:row; overflow:hidden; }
     </div>
     <div class="field-group">
       <div class="field-label">Default Model Provider</div>
-      <div id="ob-provider-list" style="margin-top:4px;"></div>
+      <select class="field-select" id="ob-provider-select" onchange="onProviderDropdownChange()">
+        <option value="">Select provider...</option>
+      </select>
+
       <div id="ob-custom-url" style="display:none;margin-top:8px;">
         <input class="field-input" id="ob-custom-base" placeholder="http://localhost:8080/v1">
       </div>
+
       <div id="ob-model-row" style="margin-top:8px;display:none;">
         <div class="field-label">Model</div>
-        <input class="field-input" id="ob-model" placeholder="e.g. claude-sonnet-4-20250514">
+        <select class="field-select" id="ob-model" onchange="onModelDropdownChange()">
+          <option value="">Select model...</option>
+        </select>
       </div>
+
+      <div id="ob-selected-summary" style="margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--accent);display:none;"></div>
       <div id="ob-provider-status" style="margin-top:8px;font-family:var(--mono);font-size:11px;display:none;padding:8px 12px;border:1px solid var(--border);"></div>
     </div>
     <div style="display:flex;gap:12px;margin-top:32px;">
@@ -5673,102 +5681,122 @@ var _selectedProvider = null;
 var _providerValidated = false;
 
 function renderProviderList(containerId) {
-  var el = document.getElementById(containerId);
-  if (!el) return;
-  el.innerHTML = '';
+  var select = document.getElementById('ob-provider-select');
+  if (!select) return;
+
+  select.innerHTML = '<option value="">Select provider...</option>';
+
   PROVIDERS.forEach(function(prov) {
-    var opt = document.createElement('div');
-    opt.className = 'provider-option';
-    var subNote = '';
-    if (prov.id === 'free_proxy') {
-      subNote = '<div style="font-family:var(--mono);font-size:10px;color:#22c55e;">★ Recommended — run proxy locally, use your own free key</div>';
-    } else if (prov.id === 'local') {
-      var ollamaStatus = window._ollamaStatus || 'checking';
-      var statusColor = ollamaStatus === 'online' ? 'var(--green)' : ollamaStatus === 'checking' ? 'var(--accent)' : 'var(--text-dim)';
-      var statusText  = ollamaStatus === 'online' ? 'ONLINE — ' + (window._ollamaModels||[]).length + ' models detected' : ollamaStatus === 'checking' ? 'Checking...' : 'OFFLINE — install Ollama to enable';
-      subNote = '<div id="ollama-status-note" style="font-family:var(--mono);font-size:10px;color:' + statusColor + ';">' + statusText + '</div>';
-    } else if (prov.envVar) {
-      subNote = '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">' + prov.envVar + '</div>';
-    } else if (prov.local) {
-      subNote = '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">No key needed — local server</div>';
-    }
-    opt.innerHTML =
-      '<input type="radio" name="ob-provider" value="' + prov.id + '">' +
-      '<div class="provider-icon-sm" style="background:' + prov.color + '22;color:' + prov.color + '">' + prov.icon + '</div>' +
-      '<div style="flex:1;"><div style="font-weight:600;font-size:13px;">' + prov.name + '</div>' + subNote + '</div>';
-    opt.addEventListener('click', function() {
-      document.querySelectorAll('.provider-option').forEach(function(o){ o.classList.remove('selected'); });
-      opt.classList.add('selected');
-      opt.querySelector('input[type=radio]').checked = true;
-      _selectedProvider = prov;
-      _providerValidated = false;
-      var customRow  = document.getElementById('ob-custom-url');
-      var modelRow   = document.getElementById('ob-model-row');
-      var modelInput = document.getElementById('ob-model');
-      var proxyPanel = document.getElementById('ob-free-proxy-panel');
-      var ollamaPanel= document.getElementById('ob-ollama-panel');
-      if (customRow)   customRow.style.display   = prov.id === 'custom'     ? '' : 'none';
-      if (modelRow)    modelRow.style.display    = (prov.id === 'later' || prov.id === 'free_proxy') ? 'none' : '';
-      if (proxyPanel)  proxyPanel.style.display  = prov.id === 'free_proxy' ? '' : 'none';
-      if (ollamaPanel) ollamaPanel.style.display = prov.id === 'local'      ? '' : 'none';
-      if (modelInput && prov.defaultModel) modelInput.value = prov.defaultModel;
-      var statusEl = document.getElementById('ob-provider-status');
-      if (prov.id === 'free_proxy') {
-        if (statusEl) { statusEl.style.display = ''; statusEl.style.color = '#22c55e'; statusEl.textContent = 'Free tier selected — configure your backend below, then start the proxy.'; }
-        _providerValidated = true;
-      } else if (prov.id === 'later') {
-        if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Will configure after company creation.'; statusEl.style.color = 'var(--text-dim)'; }
-        _providerValidated = true;
-      } else {
-        if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Checking...'; statusEl.style.color = 'var(--accent)'; }
-        setTimeout(function(){ validateSelectedProvider(); }, 300);
-      }
-    });
-    el.appendChild(opt);
+    var op = document.createElement('option');
+    op.value = prov.id;
 
-    // Inject free proxy sub-panel after free_proxy option
+    var label = prov.name;
+
     if (prov.id === 'free_proxy') {
-      var panel = document.createElement('div');
-      panel.id = 'ob-free-proxy-panel';
-      panel.style.cssText = 'display:none;margin:8px 0 4px 0;padding:12px;background:rgba(34,197,94,.05);border:1px solid rgba(34,197,94,.2);';
-      panel.innerHTML =
-        '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:10px;line-height:1.7;">' +
-        '① Get a free key from your chosen backend below<br>' +
-        '② Start the proxy: <span style="color:#22c55e;user-select:all;">cd external_nodes/free_proxy && uv run uvicorn server:app --host 0.0.0.0 --port 8082</span><br>' +
-        '③ Create your company — CEO will use it automatically' +
-        '</div>' +
-        '<div style="display:flex;gap:6px;margin-bottom:10px;">' +
-        FREE_PROXY_BACKENDS.map(function(b){
-          return '<div class="proxy-backend-btn' + (b.id === _selectedFreeBackend ? ' selected' : '') + '" data-bid="' + b.id + '" ' +
-            'style="flex:1;padding:6px 8px;border:1px solid ' + (b.id===_selectedFreeBackend?'#22c55e':'var(--border)') + ';cursor:pointer;font-family:var(--mono);font-size:10px;text-align:center;transition:all .15s;">' +
-            b.name + '</div>';
-        }).join('') +
-        '</div>' +
-        '<div id="ob-proxy-backend-detail"></div>';
-      el.appendChild(panel);
-      // Attach backend switcher clicks
-      panel.querySelectorAll('.proxy-backend-btn').forEach(function(btn){
-        btn.addEventListener('click', function(){
-          _selectedFreeBackend = btn.dataset.bid;
-          panel.querySelectorAll('.proxy-backend-btn').forEach(function(b){
-            b.style.borderColor = b.dataset.bid === _selectedFreeBackend ? '#22c55e' : 'var(--border)';
-          });
-          renderProxyBackendDetail();
-        });
-      });
-      renderProxyBackendDetail();
+      label += ' — Free Tier';
     }
 
-    // Inject Ollama sub-panel after local option
     if (prov.id === 'local') {
-      var op = document.createElement('div');
-      op.id = 'ob-ollama-panel';
-      op.style.cssText = 'display:none;margin:8px 0 4px 0;padding:12px;background:rgba(71,130,255,.05);border:1px solid rgba(71,130,255,.2);';
-      op.innerHTML = '<div id="ob-ollama-model-list" style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">Checking Ollama...</div>';
-      el.appendChild(op);
-      renderOllamaModelList();
+      var count = (window._ollamaModels || []).length;
+      label += window._ollamaStatus === 'online'
+        ? ' — Ollama Local (' + count + ' models)'
+        : ' — Ollama Local';
     }
+
+    op.textContent = label;
+    select.appendChild(op);
   });
+}
+
+function onProviderDropdownChange() {
+  var providerSelect = document.getElementById('ob-provider-select');
+  var modelRow = document.getElementById('ob-model-row');
+  var modelSelect = document.getElementById('ob-model');
+  var customRow = document.getElementById('ob-custom-url');
+  var statusEl = document.getElementById('ob-provider-status');
+  var summary = document.getElementById('ob-selected-summary');
+
+  var providerId = providerSelect ? providerSelect.value : '';
+  var prov = PROVIDERS.find(function(p) { return p.id === providerId; }) || null;
+
+  _selectedProvider = prov;
+  _providerValidated = false;
+
+  if (modelSelect) {
+    modelSelect.innerHTML = '<option value="">Select model...</option>';
+  }
+
+  if (customRow) {
+    customRow.style.display = prov && prov.id === 'custom' ? '' : 'none';
+  }
+
+  if (statusEl) {
+    statusEl.style.display = 'none';
+    statusEl.textContent = '';
+  }
+
+  if (summary) {
+    summary.style.display = prov ? '' : 'none';
+    summary.textContent = prov ? 'Selected provider: ' + prov.name : '';
+  }
+
+  if (!prov) {
+    if (modelRow) modelRow.style.display = 'none';
+    return;
+  }
+
+  var needsModel = !(prov.id === 'later' || prov.id === 'free_proxy');
+  if (modelRow) modelRow.style.display = needsModel ? '' : 'none';
+
+  if (needsModel && modelSelect) {
+    var models = [];
+
+    if (prov.id === 'local') {
+      models = window._ollamaModels || [];
+    } else if (prov.models) {
+      models = Object.values(prov.models);
+    } else if (prov.defaultModel) {
+      models = [prov.defaultModel];
+    }
+
+    models.forEach(function(model) {
+      if (!model) return;
+      var op = document.createElement('option');
+      op.value = model;
+      op.textContent = model;
+      modelSelect.appendChild(op);
+    });
+
+    if (modelSelect.options.length > 1) {
+      modelSelect.selectedIndex = 1;
+      window._selectedOllamaModel = modelSelect.value;
+    }
+  }
+
+  if (prov.id === 'free_proxy' || prov.id === 'later') {
+    _providerValidated = true;
+  } else {
+    setTimeout(function(){ validateSelectedProvider(); }, 250);
+  }
+
+  onModelDropdownChange();
+}
+
+function onModelDropdownChange() {
+  var providerSelect = document.getElementById('ob-provider-select');
+  var modelSelect = document.getElementById('ob-model');
+  var summary = document.getElementById('ob-selected-summary');
+
+  var providerId = providerSelect ? providerSelect.value : '';
+  var prov = PROVIDERS.find(function(p) { return p.id === providerId; }) || null;
+  var model = modelSelect ? modelSelect.value : '';
+
+  window._selectedOllamaModel = model || '';
+
+  if (summary && prov) {
+    summary.style.display = '';
+    summary.textContent = 'Selected: ' + prov.name + (model ? ' / ' + model : '');
+  }
 }
 
 function renderProxyBackendDetail() {
@@ -5787,18 +5815,13 @@ function cacheProxyKey() {
 }
 
 function renderOllamaModelList() {
-  var el = document.getElementById('ob-ollama-model-list');
-  if (!el) return;
-  if (window._ollamaStatus === 'online' && window._ollamaModels && window._ollamaModels.length) {
-    el.innerHTML = '<div style="color:var(--green);margin-bottom:6px;">✓ Ollama online — select model:</div>' +
-      window._ollamaModels.slice(0,8).map(function(m){
-        return '<div class="ollama-model-opt" data-model="' + m + '" style="padding:4px 8px;cursor:pointer;border:1px solid transparent;margin-bottom:3px;font-size:10px;" onclick="selectOllamaModel(this,\'' + m + '\')">' + m + '</div>';
-      }).join('');
-  } else if (window._ollamaStatus === 'offline') {
-    el.innerHTML = '<div style="color:var(--yellow);">Ollama not detected. <a href="https://ollama.com" target="_blank" style="color:var(--accent);">Install Ollama</a>, then pull a model: <span style="color:var(--text-primary);">ollama pull llama3.2</span></div>';
-  } else {
-    el.innerHTML = '<div style="color:var(--accent);">Checking for Ollama...</div>';
-  }
+  var providerSelect = document.getElementById('ob-provider-select');
+  var modelSelect = document.getElementById('ob-model');
+
+  if (!providerSelect || !modelSelect) return;
+  if (providerSelect.value !== 'local') return;
+
+  onProviderDropdownChange();
 }
 
 function selectOllamaModel(el, model) {
