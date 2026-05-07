@@ -2455,7 +2455,22 @@ function saveAgent(){
     }
   },2000);
 }
-function deleteCurrentAgent(){const a=RockoCore.getAgent(currentAgentId);if(!a||!confirm('Delete "'+a.name+'"?'))return;RockoCore.deleteAgent(currentAgentId);currentAgentId=null;}
+function deleteCurrentAgent(){
+  const a = RockoCore.getAgent(currentAgentId);
+  if(!a || !confirm('Delete "' + a.name + '"?')) return;
+
+  const projectName = a.project || RockoCore.getActiveProject();
+
+  RockoCore.deleteAgent(currentAgentId);
+  currentAgentId = null;
+
+  if(projectName){
+    syncCompanyAgentCache(projectName);
+    RockoCore.saveState();
+  }
+
+  refreshAll();
+}
 function confirmDelete(id){const a=RockoCore.getAgent(id);if(!a||!confirm('Delete "'+a.name+'"?'))return;RockoCore.deleteAgent(id);if(currentAgentId===id)currentAgentId=null;}
 function duplicateAgent(){
   const a=RockoCore.getAgent(currentAgentId);if(!a)return;
@@ -4053,7 +4068,6 @@ function restoreRockoStateOnBoot(){
 
   return false;
 }
-
 function showOnboarding()  { var o = document.getElementById('onboardingOverlay'); if (o) o.classList.add('show'); }
 function hideOnboarding()  { var o = document.getElementById('onboardingOverlay'); if (o) o.classList.remove('show'); }
 
