@@ -1881,21 +1881,59 @@ const RockoCore = (() => {
 
   // ── Model Layer ──────────────────────────────────────────────
   async function _callProvider(agent,messages){
-    // Guard: refuse to silently switch providers - show real state
-    if(!agent.provider || agent.provider==='__unset__'){
-      throw new Error('No provider configured. Create a company and select a model provider.');
+    if(!agent.provider || agent.provider==='__unset__' || agent.provider==='later'){
+      throw new Error('No provider configured. Select Ollama or another provider in company settings.');
     }
+
     if(agent.provider==='anthropic'){
-      const res=await fetch(`${agent.api_base}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:agent.model,max_tokens:1000,system:agent.instructions||'You are a helpful agent.',messages})});
-      const data=await res.json(); if(data.error)throw new Error(data.error.message); return data;
+      const res=await fetch(`${agent.api_base}/messages`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          model:agent.model,
+          max_tokens:1000,
+          system:agent.instructions||'You are a helpful agent.',
+          messages
+        })
+      });
+      const data=await res.json();
+      if(data.error)throw new Error(data.error.message);
+      return data;
     }
-    if(agent.provider==='openai_compatible'){
-      const res=await fetch(`${agent.api_base}/chat/completions`,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:agent.model,messages:[{role:'system',content:agent.instructions||''},...messages]})});
-      const data=await res.json(); if(data.error)throw new Error(data.error.message);
-      return{content:[{type:'text',text:data.choices?.[0]?.message?.content||''}],usage:{output_tokens:data.usage?.completion_tokens}};
+
+    const openAICompatibleProviders = ['openai_compatible','local','lmstudio','custom','free_proxy','openai','nvidia','gemini'];
+
+    if(openAICompatibleProviders.includes(agent.provider)){
+      const base = agent.api_base || (
+        agent.provider === 'local' ? 'http://localhost:11434/v1' :
+        agent.provider === 'lmstudio' ? 'http://localhost:1234/v1' :
+        agent.provider === 'free_proxy' ? 'http://localhost:8082/v1' :
+        ''
+      );
+
+      if(!base){
+        throw new Error('Provider "' + agent.provider + '" has no API base URL configured.');
+      }
+
+      const res=await fetch(`${base}/chat/completions`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          model:agent.model,
+          messages:[{role:'system',content:agent.instructions||''},...messages]
+        })
+      });
+
+      const data=await res.json();
+
+      if(data.error)throw new Error(data.error.message || JSON.stringify(data.error));
+
+      return {
+        content:[{type:'text',text:data.choices?.[0]?.message?.content || ''}],
+        usage:{output_tokens:data.usage?.completion_tokens || 0}
+      };
     }
+
     throw new Error('Unknown provider: "'+agent.provider+'"');
   }
   async function callAgent(agentId,userMessage,history=[]){
@@ -2020,42 +2058,29 @@ const RockoCore = (() => {
     saveState(); emit('agentUpdated',{agent:_agents[id]}); return true;
   }
   function deleteAgent(id){
-  const a = _agents[id];
-  if(!a) return false;
+    const a = _agents[id];
+    if(!a) return false;
 
-  const projectName = a.project;
-  const wasCEO = a.role === 'ceo' || id === 'ceo' || id === 'ceo_agent';
+    const projectName = a.project;
 
-  delete _agents[id];
+    delete _agents[id];
 
-  const m = _projects[projectName];
-  if(m){
-    m.agents = (m.agents || []).filter(x => x.id !== id);
+    const m = _projects[projectName];
+    if(m){
+      m.agents = (m.agents || []).filter(x => x && x.id !== id);
 
-    if(m.pipeline && Array.isArray(m.pipeline.execution_order)){
-      m.pipeline.execution_order = m.pipeline.execution_order.filter(step => {
-        return !(step && step.type === 'agent' && step.agent_id === id);
-      });
+      if(m.pipeline && Array.isArray(m.pipeline.execution_order)){
+        m.pipeline.execution_order = m.pipeline.execution_order.filter(step => {
+          return !(step && step.type === 'agent' && step.agent_id === id);
+        });
+      }
     }
+
+    saveState();
+    log('warn','Agent deleted: '+a.name);
+    emit('agentDeleted',{agentId:id});
+    return true;
   }
-
-  if(wasCEO){
-    const remainingCEO = Object.values(_agents).find(x =>
-      x && x.project === projectName && (x.role === 'ceo' || x.id === 'ceo' || x.id === 'ceo_agent')
-    );
-
-    if(remainingCEO){
-      repairCEOPipeline(projectName, remainingCEO);
-    }else{
-      ensureCompanyCEO(projectName, projectName, '');
-    }
-  }
-
-  saveState();
-  log('warn','Agent deleted: '+a.name);
-  emit('agentDeleted',{agentId:id});
-  return true;
-}
 
   function exportProject(proj){
     const manifest=_projects[proj]; if(!manifest)return null;
@@ -2479,7 +2504,23 @@ function deleteCurrentAgent(){
 
   refreshAll();
 }
-function confirmDelete(id){const a=RockoCore.getAgent(id);if(!a||!confirm('Delete "'+a.name+'"?'))return;RockoCore.deleteAgent(id);if(currentAgentId===id)currentAgentId=null;}
+function confirmDelete(id){
+  const a = RockoCore.getAgent(id);
+  if(!a || !confirm('Delete "' + a.name + '"?')) return;
+
+  const projectName = a.project || RockoCore.getActiveProject();
+
+  RockoCore.deleteAgent(id);
+
+  if(currentAgentId === id) currentAgentId = null;
+
+  if(projectName){
+    syncCompanyAgentCache(projectName);
+    RockoCore.saveState();
+  }
+
+  refreshAll();
+}
 function duplicateAgent(){
   const a=RockoCore.getAgent(currentAgentId);if(!a)return;
   const def={id:'agent_'+Date.now(),name:a.name+' (Copy)',role:a.role,type:a.type,instruction_file:a.instruction_file,
@@ -2544,31 +2585,17 @@ async function runAgentNow(){
     log.scrollTop = log.scrollHeight;
   }
 
-  RockoCore.updateAgent(currentAgentId,{status:'active'});
-  refreshAll();
-
   try{
     var t0 = Date.now();
-    var result = null;
 
-    try{
-      result = await bridgePost('/agent/run',{
-        agent_id:currentAgentId,
-        id:currentAgentId,
-        project:a.project,
-        message:msg,
-        input:msg
-      });
-    }catch(e){}
+    RockoCore.updateAgent(currentAgentId,{status:'active'});
+    refreshAll();
 
-    if(!result){
-      result = await RockoCore.callAgent(currentAgentId,msg);
-    }
-
+    var result = await RockoCore.callAgent(currentAgentId,msg);
     var text = extractAgentText(result);
 
     if(!text){
-      throw new Error('Agent returned no response. Check provider/API key or bridge route.');
+      throw new Error('Agent returned no response. Check selected provider/model configuration.');
     }
 
     RockoCore.updateAgent(currentAgentId,{status:'idle'});
@@ -4106,6 +4133,19 @@ function _createCompany(displayName, description, path, logo){
   var id = displayName.toLowerCase().replace(/[^a-z0-9]/g,'_') + '_' + Date.now().toString(36);
   var safeProjectName = displayName.replace(/\s+/g,'_');
 
+  var selectedProvider = _obProviderConfig || {provider_id:'later',model:'',status:'configure_later',base_url:''};
+
+  var providerId = selectedProvider.provider_id || 'later';
+  var selectedModel = selectedProvider.model || '';
+
+  var providerApiBase =
+    selectedProvider.base_url ||
+    (providerId === 'local' ? 'http://localhost:11434/v1' :
+     providerId === 'lmstudio' ? 'http://localhost:1234/v1' :
+     providerId === 'free_proxy' ? 'http://localhost:8082/v1' :
+     providerId === 'anthropic' ? 'https://api.anthropic.com/v1' :
+     '');
+
   var ceoInstructions = '# CEO\n\n'
     + 'Role: CEO / Strategy Orchestrator\n'
     + 'Company: ' + displayName + '\n'
@@ -4129,7 +4169,7 @@ function _createCompany(displayName, description, path, logo){
       model_override:null,
       pipeline_step:'ceo_agent_step',
       enabled:true,
-      status:'active',
+      status:'idle',
       project_tools:['filesystem','http'],
       apis:[],
       local_code:null,
@@ -4138,7 +4178,15 @@ function _createCompany(displayName, description, path, logo){
     }]
   });
 
-  var prov = _obProviderConfig || {provider_id:'later',model:'',status:'configure_later'};
+  proj.model.default_provider = providerId;
+  proj.model.default_model = selectedModel;
+  proj.model.providers = {};
+  proj.model.providers[providerId] = {
+    type: providerId === 'anthropic' ? 'anthropic' : 'openai_compatible',
+    api_base: providerApiBase,
+    temperature: .3,
+    max_tokens: 2000
+  };
 
   var co = {
     id:id,
@@ -4148,25 +4196,18 @@ function _createCompany(displayName, description, path, logo){
     logo:logo || null,
     active:false,
     created_at:new Date().toISOString(),
-    default_provider:prov.provider_id || 'later',
-    default_model:prov.model || '',
-    provider_status:prov.status || 'configure_later',
+    default_provider:providerId,
+    default_model:selectedModel,
+    base_url:providerApiBase,
+    provider_status:selectedProvider.status || 'selected',
     _manifest:proj
   };
 
   var list = getCompanies();
-  if(!list.length)co.active = true;
+  list.forEach(function(c){c.active = false;});
+  co.active = true;
   list.push(co);
   saveCompanies(list);
-
-  bridgePost('/companies',{
-    id:co.id,
-    display_name:co.display_name,
-    description:co.description,
-    project_path:co.project_path,
-    logo_path:'',
-    active:true
-  });
 
   var loaded = RockoCore.loadProject(proj);
   if(!loaded || loaded.success === false){
@@ -4177,11 +4218,18 @@ function _createCompany(displayName, description, path, logo){
   RockoCore.setActiveProject(proj.project.name);
   ensureCompanyCEO(proj.project.name, displayName, description);
 
-  list.forEach(function(c){c.active = c.id === id;});
-  saveCompanies(list);
-
+  syncCompanyAgentCache(proj.project.name);
   RockoCore.saveState();
   persistCompanyCreation(proj.project.name, co);
+
+  bridgePost('/companies',{
+    id:co.id,
+    display_name:co.display_name,
+    description:co.description,
+    project_path:co.project_path,
+    logo_path:'',
+    active:true
+  });
 
   renderCompanyRail();
   updateTopbarCompany(co);
@@ -5785,6 +5833,7 @@ function onProviderDropdownChange() {
 function onModelDropdownChange() {
   var providerSelect = document.getElementById('ob-provider-select');
   var modelSelect = document.getElementById('ob-model');
+  var customBase = document.getElementById('ob-custom-base');
   var summary = document.getElementById('ob-selected-summary');
 
   var providerId = providerSelect ? providerSelect.value : '';
@@ -5792,6 +5841,19 @@ function onModelDropdownChange() {
   var model = modelSelect ? modelSelect.value : '';
 
   window._selectedOllamaModel = model || '';
+
+  if(prov){
+    _obProviderConfig = {
+      provider_id: prov.id,
+      model: model || prov.defaultModel || '',
+      status: prov.id === 'later' ? 'configure_later' : 'selected',
+      base_url: prov.id === 'custom'
+        ? ((customBase || {}).value || '')
+        : (prov.baseUrl || '')
+    };
+  }else{
+    _obProviderConfig = null;
+  }
 
   if (summary && prov) {
     summary.style.display = '';
