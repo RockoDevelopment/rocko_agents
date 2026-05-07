@@ -1860,15 +1860,14 @@ const RockoCore = (() => {
   }
   function _buildAgent(def,manifest,instructions){
     const root=manifest.project.root_path;
-    // Resolve provider: agent override -> company default -> no silent fallback
     const _activeCo = typeof getActiveCompany === 'function' ? getActiveCompany() : null;
     const _coProvider = _activeCo ? (_activeCo.default_provider || null) : null;
     const pk = (def.model_provider && def.model_provider !== '__company_default__')
       ? def.model_provider
       : (_coProvider || manifest.model?.default_provider || '__unset__');
     const pc=manifest.model?.providers?.[pk]||{};
-    const apis={};(def.apis||[]).forEach(k=>{const a=manifest.apis?.[k];if(a)apis[k]={...a,base_url:(a.base_url||'').replace('{{PROJECT_ROOT}}',root)};});
-    const tools={};(def.project_tools||[]).forEach(k=>{const t=manifest.tools?.[k];if(t)tools[k]={...t,path:(t.path||'').replace('{{PROJECT_ROOT}}',root)};});
+    const apis={};asList(def.apis).forEach(k=>{const a=manifest.apis?.[k];if(a)apis[k]={...a,base_url:(a.base_url||'').replace('{{PROJECT_ROOT}}',root)};});
+    const tools={};asList(def.project_tools).forEach(k=>{const t=manifest.tools?.[k];if(t)tools[k]={...t,path:(t.path||'').replace('{{PROJECT_ROOT}}',root)};});
     let lc=null;if(def.local_code?.type){lc={...def.local_code,script_path:def.local_code.script_path?`${root}\${def.local_code.script_path}`:null,working_dir:def.local_code.working_dir?`${root}\${def.local_code.working_dir}`:null};}
     return{id:def.id,name:def.name,display_name:def.display_name||def.name,role:def.role,type:def.type||'prompt',
       model:def.model_override||((_activeCo&&_activeCo.default_model)||manifest.model?.default_model)||'',provider:pk,provider_key:pk,
