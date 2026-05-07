@@ -4618,26 +4618,59 @@ function submitEditCompany() {
   toastOk('Company updated: ' + name);
 }
 
-function deleteCompany(id) {
+async function deleteCompany(id) {
   var list = getCompanies();
   var co = list.find(function(c){ return c.id === id; });
   if (!co) return;
-  if (!confirm('Delete "' + (co.display_name || co.id) + '"?\n\nThis will remove the company from the hub. Agent files on disk are not deleted.')) return;
-  var wasActive = co.active;
+
+  if (!confirm('Delete "' + (co.display_name || co.id) + '" permanently?\n\nThis removes the company, its cached agents, and its saved project state from RockoAgentHub.')) return;
+
+  var projectName =
+    (co._manifest && co._manifest.project && co._manifest.project.name) ||
+    (co.display_name || co.id || '').replace(/\s+/g, '_');
+
   var newList = list.filter(function(c){ return c.id !== id; });
-  if (wasActive && newList.length) newList[0].active = true;
+  newList.forEach(function(c, i){ c.active = i === 0; });
+
+  if (projectName && RockoCore._agents) {
+    Object.keys(RockoCore._agents).forEach(function(agentId){
+      var a = RockoCore._agents[agentId];
+      if (a && a.project === projectName) delete RockoCore._agents[agentId];
+    });
+  }
+
+  if (projectName && RockoCore._projects && RockoCore._projects[projectName]) {
+    delete RockoCore._projects[projectName];
+  }
+
+  if (RockoCore.getActiveProject && RockoCore.getActiveProject() === projectName) {
+    RockoCore.setActiveProject(newList[0] && newList[0]._manifest && newList[0]._manifest.project ? newList[0]._manifest.project.name : null);
+  }
+
+  if (_pgReady && _pgdb) {
+    try { await _pgDeleteCompany(id); } catch(e) {}
+  }
+
   saveCompanies(newList);
-  if (wasActive && newList.length) {
+  RockoCore.saveState();
+
+  if (newList.length) {
     var next = newList[0];
+    if (next._manifest) {
+      RockoCore.loadProject(next._manifest);
+      RockoCore.setActiveProject(next._manifest.project ? next._manifest.project.name : next.id);
+    }
     updateTopbarCompany(next);
-    if (next._manifest) { RockoCore.loadProject(next._manifest); RockoCore.setActiveProject(next._manifest.project ? next._manifest.project.name : next.id); }
-  } else if (!newList.length) {
+  } else {
+    localStorage.removeItem(COMPANIES_KEY);
+    _companiesCache = [];
     showOnboarding();
   }
+
   renderCompanyRail();
   refreshAll();
   closeModal('editCompanyModal');
-  toastOk('Company removed.');
+  toastOk('Company permanently deleted.');
 }
 
 // Workspace gating — intercept setTab to require company
@@ -5359,22 +5392,39 @@ getCompanies = function() {
 
 var _origSaveCompanies = saveCompanies;
 saveCompanies = function(list) {
-  // Update sync cache immediately
-  _companiesCache = list;
-  // Save to PGlite async
-  if (_pgReady) {
-    Promise.all(list.map(function(co) { return _pgSaveCompany(co); })).catch(function(){});
-    bridgePost('/data/save', {key: 'companies', data: list.map(function(c){ var x=Object.assign({},c); delete x._manifest; return x; })});
-  } else {
-    // Fallback: lean localStorage save
-    var lean = list.map(function(c){ var x=Object.assign({},c); delete x._manifest; return x; });
-    try { localStorage.setItem(COMPANIES_KEY, JSON.stringify(lean)); }
-    catch(e) {
-      try { localStorage.removeItem(COMPANIES_KEY); localStorage.setItem(COMPANIES_KEY, JSON.stringify(lean)); }
-      catch(e2) { console.warn('localStorage quota exceeded'); }
+  var lean = (list || []).map(function(c){
+    var x = Object.assign({}, c);
+    delete x._manifest;
+    return x;
+  });
+
+  _companiesCache = list || [];
+
+  try {
+    localStorage.setItem(COMPANIES_KEY, JSON.stringify(lean));
+  } catch(e) {
+    try {
+      localStorage.removeItem(COMPANIES_KEY);
+      localStorage.setItem(COMPANIES_KEY, JSON.stringify(lean));
+    } catch(e2) {
+      console.warn('localStorage quota exceeded');
     }
-    bridgePost('/data/save', {key: 'companies', data: lean});
   }
+
+  if (_pgReady && _pgdb) {
+    (async function(){
+      try {
+        await _pgdb.exec('DELETE FROM companies');
+        for (var i = 0; i < (list || []).length; i++) {
+          await _pgSaveCompany(list[i]);
+        }
+      } catch(e) {
+        console.warn('PGlite full company save failed:', e);
+      }
+    })();
+  }
+
+  bridgePost('/data/save', {key:'companies', data:lean}).catch(function(){});
 };
 
 // Also persist RockoCore state to PGlite on every save
