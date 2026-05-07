@@ -2092,7 +2092,7 @@ const RockoCore = (() => {
 
   function generateProjectManifest({name,rootPath,description='',agents=[],extras={}}){
     const id=name.toLowerCase().replace(/[^a-z0-9]/g,'_');
-    const agentDefs=agents.length?agents:[{id:'ceo',name:'CEO',display_name:'CEO',role:'ceo',type:'prompt',instruction_file:'agents\\ceo\\AGENT.md',model_provider:'anthropic',model_override:null,pipeline_step:'ceo_step',enabled:true,project_tools:['filesystem','http'],apis:[],local_code:null,description:'Orchestrator.'}];
+    const agentDefs=agents.length?agents:[{id:'ceo_agent',name:'CEO',display_name:'CEO',role:'ceo',type:'prompt',instruction_file:'agents\\ceo\\AGENT.md',model_provider:'__company_default__',model_override:null,pipeline_step:'ceo_agent_step',enabled:true,status:'active',project_tools:['filesystem','http'],apis:[],local_code:null,description:'Orchestrator.'}];
     const pipelineOrder=agentDefs.map(a=>({step_id:a.pipeline_step||a.id+'_step',label:a.name,type:'agent',agent_id:a.id,requires_approval:a.role==='ceo'}));
     return{schema_version:'2.0',project:{id,name,display_name:name,description,root_path:rootPath,environment_file:'.env',created:new Date().toISOString().split('T')[0],tags:[]},
       model:{default_provider:'anthropic',default_model:'claude-sonnet-4-20250514',fallback_model:'claude-haiku-4-5-20251001',providers:{anthropic:{type:'anthropic',api_base:'https://api.anthropic.com/v1',api_key_env:'ANTHROPIC_API_KEY',temperature:.3,max_tokens:2000}}},
@@ -3735,9 +3735,14 @@ function _activateCompany(co) {
       return;
     }
 
-    RockoCore.setActiveProject(manifest.project ? manifest.project.name : co.id);
+    var activeProjName = manifest.project ? manifest.project.name : co.id;
+    RockoCore.setActiveProject(activeProjName);
 
-    syncCompanyAgentCache(RockoCore.getActiveProject());
+    if (typeof ensureCompanyCEO === 'function') {
+      ensureCompanyCEO(activeProjName, co.display_name || co.id, co.description || '');
+    }
+
+    syncCompanyAgentCache(activeProjName);
     RockoCore.saveState();
   }
 
@@ -4169,7 +4174,7 @@ function _createCompany(displayName, description, path, logo){
       model_override:null,
       pipeline_step:'ceo_agent_step',
       enabled:true,
-      status:'idle',
+      status:'active',
       project_tools:['filesystem','http'],
       apis:[],
       local_code:null,
