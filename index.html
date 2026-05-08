@@ -871,7 +871,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
   <button class="nav-tab" onclick="setTab('history',this)">Run History</button>
   <button class="nav-tab" onclick="setTab('runtimes',this)">Runtimes</button>
   <button class="nav-tab" onclick="setTab('automation',this)">Automation</button>
-  <button class="nav-tab" onclick="setTab('skills',this)">Skills</button>
+  <button class="nav-tab" onclick="setTab('runtimes',this)">Runtimes</button>
   <button class="nav-tab" onclick="setTab('orchestration',this)">Orchestration</button>
   <button class="nav-tab" onclick="setTab('settings',this)">Settings</button>
 </div>
@@ -964,7 +964,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
           <div class="field-group"><div class="field-label">Connections</div>
             <div class="connections-area"><div class="conn-chips" id="editorConnections"><button class="conn-add" onclick="addConn()">+ Add</button></div></div>
           </div>
-          <div class="field-group"><div class="field-label">Skills</div><input class="field-input" id="editorTags" placeholder="e.g. marketing, research" /></div>
+          <div class="field-group"><div class="field-label">Tags</div><input class="field-input" id="editorTags" placeholder="comma separated" /></div>
         </div>
         <div class="editor-sidebar">
           <div class="meta-block">
@@ -2437,7 +2437,6 @@ function setTab(view,btn){
   showView(view);
   if(view==='tasks')refreshTasks();
   if(view==='history')renderRunHistory();
-  if(view==='skills'){loadSkillsLibrary().then(renderSkillsTab);}
   if(view==='settings'){renderSettings();refreshSettingsExternalStatus();setTimeout(function(){if(RockoCore.isBridgeOnline())bridgeGet('/validate').then(function(d){if(d&&window._lastValidateResult!==JSON.stringify(d)){window._lastValidateResult=JSON.stringify(d);}});},300);}
 }
 
@@ -2449,7 +2448,6 @@ function renderSidebar(){
   const agents=RockoCore.getAgents(proj).sort((a,b)=>String(a.pipeline_step).localeCompare(String(b.pipeline_step)));
   const rT=r=>r||'—';
   document.getElementById('agentList').innerHTML=`
-    <div class="project-header"><span>${proj||'—'}</span><span class="proj-badge">${agents.length}</span></div>
     ${agents.map(a=>`
       <div class="agent-item ${currentAgentId===a.id?'active':''}" onclick="openAgent('${a.id}')">
         <div class="agent-status-dot status-${a.status}"></div>
@@ -2738,7 +2736,7 @@ function openAgent(id){
   document.getElementById('editorStep').value=a.pipeline_step||'';
   document.getElementById('editorScriptPath').value=a.local_code?.script_path||'';
   document.getElementById('editorEntryPoint').value=a.local_code?.entry||a.local_code?.entry_point||'';
-  document.getElementById('editorTags').value=(a.skills||a.tags||[]).join(', ');
+  document.getElementById('editorTags').value=(a.tags||[]).join(', ');
   document.getElementById('metaId').textContent=a.id;
   document.getElementById('metaProject').textContent=a.project;
   document.getElementById('metaProvider').textContent=a.provider_key||a.provider||'—';
@@ -2794,10 +2792,6 @@ function saveAgent(){
     status:editorStatus,
     connections:editorConns,
     outputs_to:editorConns,
-    skills:document.getElementById('editorTags').value
-      .split(',')
-      .map(s=>s.trim())
-      .filter(Boolean),
     tags:document.getElementById('editorTags').value
       .split(',')
       .map(s=>s.trim())
@@ -5225,57 +5219,6 @@ var _skillsLibrary  = [];
 var _skillsTargetId = null;
 var _skillsSource   = 'local';
 
-function renderSkillsTab() {
-  var el = document.getElementById('skillsTabList');
-  if (!el) return;
-  var searchEl = document.getElementById('skillsTabSearch');
-  var query = searchEl ? searchEl.value.toLowerCase() : '';
-  var list = _skillsLibrary.filter(function(s) {
-    if (!query) return true;
-    return (s.name||'').toLowerCase().includes(query) ||
-           (s.description||'').toLowerCase().includes(query) ||
-           (s.source||'').toLowerCase().includes(query);
-  });
-  if (!list.length) {
-    el.innerHTML = '<div style="text-align:center;padding:40px;font-family:var(--mono);font-size:12px;color:var(--text-dim);">' +
-      '<div style="font-size:28px;margin-bottom:12px;">📦</div>' +
-      (query ? 'No skills match that search.' : 'No skills loaded yet — bridge must be running.') +
-      '<br><button class="btn btn-ghost" style="margin-top:12px;" onclick="loadSkillsLibrary(true).then(renderSkillsTab)">⟳ Fetch from skills.sh</button>' +
-      '</div>';
-    return;
-  }
-  var html = '';
-  list.forEach(function(s) {
-    var name     = s.name || s.slug || s.id || '';
-    var source   = s.source || '';
-    var desc     = s.description || '';
-    var installs = s.installs ? (s.installs > 999 ? Math.round(s.installs/1000) + 'K' : s.installs) + ' installs' : '';
-    var skillId  = s.id || name;
-    html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border);gap:12px;">' +
-      '<div style="flex:1;min-width:0;">' +
-        '<div style="font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);">' + name + '</div>' +
-        (source ? '<div style="font-size:10px;color:var(--text-dim);margin-top:2px;">' + source + '</div>' : '') +
-        (desc   ? '<div style="font-size:11px;color:var(--text-secondary);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + desc + '</div>' : '') +
-      '</div>' +
-      '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">' +
-        (installs ? '<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">' + installs + '</span>' : '') +
-        '<button class="btn btn-ghost" style="padding:4px 10px;font-size:10px;" data-skill-id="' + skillId + '" onclick="copySkillId(this)">⎘ Copy ID</button>' +
-      '</div>' +
-    '</div>';
-  });
-  el.innerHTML = html;
-}
-
-function copySkillId(btn) {
-  var id = btn.getAttribute('data-skill-id');
-  if (!id) return;
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(id).then(function() { toastOk('Copied: ' + id); });
-  } else {
-    toastOk('ID: ' + id);
-  }
-}
-
 async function loadSkillsLibrary(forceRemote) {
   if (!forceRemote && _skillsLibrary.length) return;
   var d = null;
@@ -6714,22 +6657,22 @@ fullBoot();
 <div class="toast-container" id="toastContainer"></div>
 
 
-    <!-- SKILLS -->
-    <div class="view" id="view-skills">
+    <!-- RUNTIMES -->
+    <div class="view" id="view-runtimes">
       <div class="dash-header">
-        <div class="dash-title">Skills</div>
-        <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
-          <input id="skillsTabSearch" class="field-input" style="width:220px;height:30px;font-size:11px;" placeholder="Search skills..." oninput="renderSkillsTab()" />
-          <button class="btn btn-ghost" onclick="loadSkillsLibrary(true).then(renderSkillsTab)">⟳ Refresh</button>
+        <div class="dash-title">External Runtimes</div>
+        <div style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-ghost" onclick="refreshRuntimes()">⟳ Refresh</button>
+          <button class="btn btn-ghost" onclick="openLogModal()">Logs</button>
         </div>
       </div>
       <div class="auto-body">
-        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);line-height:1.7;background:var(--bg-card);border:1px solid var(--border);padding:12px 16px;margin-bottom:12px;">
-          Skills are reusable capabilities sourced from <span style="color:var(--accent)">skills.sh</span>.
-          Assign a skill to an agent to append its instructions to that agent's system prompt.
-          The CEO can autonomously assign skills during pipeline runs.
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);line-height:1.7;background:var(--bg-card);border:1px solid var(--border);padding:12px 16px;">
+          Runtimes are external agent systems configured in <span style="color:var(--accent)">project.json → runtimes</span>.
+          Supported types: <span style="color:var(--accent)">cli</span> · <span style="color:var(--accent)">http</span> · <span style="color:var(--accent)">webhook</span> · <span style="color:var(--accent)">mcp</span>.
+          Risk levels: <span style="color:var(--green)">read_only</span> · <span style="color:var(--yellow)">write</span> · <span style="color:var(--red)">deploy</span> · <span style="color:var(--red)">financial</span> (last two require human approval).
         </div>
-        <div id="skillsTabList"></div>
+        <div id="runtimesList"><div class="empty-state">Loading runtimes...</div></div>
       </div>
     </div>
 
