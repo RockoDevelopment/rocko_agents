@@ -40,6 +40,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 # ── Clawd-Code path registration ─────────────────────────────────────────────
 # Resolve the Clawd-Code repo relative to this file's location.
 # Supports both sibling-directory layout and explicit CLAWD_CODE_PATH env var.
+# Clawd-Code is cloned into bridge/Clawd-Code via:
+#   git clone https://github.com/GPT-AGI/Clawd-Code.git bridge/Clawd-Code
 _CLAWD_PATH = os.environ.get("CLAWD_CODE_PATH") or str(
     Path(__file__).parent / "Clawd-Code"
 )
@@ -315,44 +317,59 @@ class NativeExecutionEngine:
 
     def _load_clawd_skills_markdown(self, cfg: Dict, env: Dict) -> str:
         """
-        Load skills from Clawd-Code skill dirs and return combined markdown.
-        Priority order (mirrors Clawd-Code's own resolution):
-          1. cfg['skills_dir'] — executor-specific override
-          2. project root .clawd/skills
-          3. ~/.clawd/skills — user global skills
-        Only skills listed in cfg['skills'] are loaded.
-        If cfg['skills'] is empty, all available skills are loaded.
+        Load skills and return combined markdown to append to system prompt.
+
+        Sources checked in priority order:
+          1. .rocko_skills/    — skills downloaded from skills.sh by the bridge (CEO delegation + manual)
+          2. Clawd-Code dirs   — ~/.clawd/skills, project .clawd/skills (if Clawd available)
+
+        Skills listed in cfg['skills'] are loaded by name/id.
+        If cfg['skills'] is empty, all available skills from all sources are loaded.
+        This is the alignment point between skills.sh and Clawd-Code.
         """
-        if not _CLAWD_AVAILABLE:
-            return ""
-
         skill_names: List[str] = cfg.get("skills", [])
-        project_root = self._project_root or "."
+        parts: List[str] = []
+        loaded_names: set = set()
 
-        try:
-            all_skills = get_all_skills(
-                project_root=project_root,
-                user_skills_dir=cfg.get("skills_dir") or None,
-            )
-        except Exception as e:
-            self._log(f"Skills load warning: {e}")
-            return ""
+        # ── Source 1: .rocko_skills/ — bridge-downloaded skills.sh content ─────
+        if self._project_root:
+            rocko_skills_dir = Path(self._project_root) / ".rocko_skills"
+            if rocko_skills_dir.exists():
+                for skill_file in sorted(rocko_skills_dir.glob("*.md")):
+                    # File name format: owner__repo__skillname.md  (from _skillssh_fetch)
+                    skill_key = skill_file.stem.replace("__", "/")
+                    skill_short = skill_file.stem.split("__")[-1] if "__" in skill_file.stem else skill_file.stem
+                    # Load if: no filter, or matches by full key or short name
+                    if not skill_names or skill_key in skill_names or skill_short in skill_names:
+                        try:
+                            with open(skill_file, "r", encoding="utf-8") as f:
+                                md = f.read()
+                            parts.append(f"\n\n---\n## Skill: {skill_short}\n{md}")
+                            loaded_names.add(skill_short)
+                            self._log(f"Skill loaded from .rocko_skills: {skill_short}")
+                        except Exception as e:
+                            self._log(f"Skill read error {skill_file.name}: {e}")
 
-        if not all_skills:
-            return ""
+        # ── Source 2: Clawd-Code skill dirs ──────────────────────────────────────
+        if _CLAWD_AVAILABLE:
+            project_root = self._project_root or "."
+            try:
+                all_clawd_skills = get_all_skills(
+                    project_root=project_root,
+                    user_skills_dir=cfg.get("skills_dir") or None,
+                )
+                for skill in (all_clawd_skills or []):
+                    if skill.name in loaded_names:
+                        continue  # already loaded from .rocko_skills
+                    if not skill_names or skill.name in skill_names:
+                        parts.append(f"\n\n---\n## Skill: {skill.name}\n{skill.markdown_content}")
+                        loaded_names.add(skill.name)
+                        self._log(f"Skill loaded from Clawd: {skill.name} ({skill.loaded_from})")
+            except Exception as e:
+                self._log(f"Clawd skills load warning: {e}")
 
-        matched = (
-            [s for s in all_skills if s.name in skill_names]
-            if skill_names else list(all_skills)
-        )
-
-        if not matched:
-            return ""
-
-        parts = []
-        for skill in matched:
-            parts.append(f"\n\n---\n## Skill: {skill.name}\n{skill.markdown_content}")
-            self._log(f"Skill loaded: {skill.name} ({skill.loaded_from})")
+        if not parts:
+            self._log("No skills loaded (none in .rocko_skills/ or Clawd dirs)")
 
         return "".join(parts)
 
@@ -613,34 +630,67 @@ class NativeExecutionEngine:
 
     def get_available_skills(self, skills_dir: Optional[str] = None) -> List[Dict]:
         """
-        Return all available Clawd skills as serialisable dicts.
-        The bridge /skills/browse endpoint calls this to serve the frontend.
-        Dynamic — reflects whatever SKILL.md files are present on disk.
+        Return all available skills as serialisable dicts.
+        Merges two sources:
+          1. .rocko_skills/  — skills downloaded from skills.sh (primary, always checked)
+          2. Clawd-Code dirs — ~/.clawd/skills, project .clawd/skills (if available)
+        The bridge /skills/browse endpoint can call this for a local inventory.
         """
-        if not _CLAWD_AVAILABLE:
-            return []
-        try:
-            skills = get_all_skills(
-                project_root=self._project_root or None,
-                user_skills_dir=skills_dir or None,
-            )
-            return [
-                {
-                    "id":             s.name,
-                    "name":           s.name,
-                    "description":    s.description,
-                    "loaded_from":    s.loaded_from,
-                    "version":        s.version,
-                    "when_to_use":    s.when_to_use,
-                    "allowed_tools":  list(s.allowed_tools or []),
-                    "user_invocable": s.user_invocable,
-                    "skill_root":     s.skill_root,
-                }
-                for s in skills
-            ]
-        except Exception as e:
-            self._log(f"get_available_skills error: {e}")
-            return []
+        result: List[Dict] = []
+        seen: set = set()
+
+        # Source 1: .rocko_skills/ — skills.sh downloaded content
+        if self._project_root:
+            rocko_dir = Path(self._project_root) / ".rocko_skills"
+            if rocko_dir.exists():
+                for skill_file in sorted(rocko_dir.glob("*.md")):
+                    skill_id = skill_file.stem.replace("__", "/")
+                    name     = skill_file.stem.split("__")[-1] if "__" in skill_file.stem else skill_file.stem
+                    if name in seen:
+                        continue
+                    seen.add(name)
+                    try:
+                        with open(skill_file, "r", encoding="utf-8") as f:
+                            md = f.read()
+                        result.append({
+                            "id":          skill_id,
+                            "name":        name,
+                            "description": "",
+                            "loaded_from": str(skill_file),
+                            "source":      "skills.sh",
+                            "cached":      True,
+                        })
+                    except Exception:
+                        pass
+
+        # Source 2: Clawd-Code dirs
+        if _CLAWD_AVAILABLE:
+            try:
+                clawd_skills = get_all_skills(
+                    project_root=self._project_root or None,
+                    user_skills_dir=skills_dir or None,
+                )
+                for s in (clawd_skills or []):
+                    if s.name in seen:
+                        continue
+                    seen.add(s.name)
+                    result.append({
+                        "id":             s.name,
+                        "name":           s.name,
+                        "description":    s.description,
+                        "loaded_from":    s.loaded_from,
+                        "version":        s.version,
+                        "when_to_use":    s.when_to_use,
+                        "allowed_tools":  list(s.allowed_tools or []),
+                        "user_invocable": s.user_invocable,
+                        "skill_root":     s.skill_root,
+                        "source":         "clawd",
+                        "cached":         False,
+                    })
+            except Exception as e:
+                self._log(f"get_available_skills Clawd error: {e}")
+
+        return result
 
     def get_skill_markdown(self, skill_name: str,
                            skills_dir: Optional[str] = None) -> Optional[str]:

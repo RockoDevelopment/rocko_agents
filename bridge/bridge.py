@@ -31,6 +31,7 @@ else:
     sys.path.insert(0, str(BRIDGE_DIR))
 
 BRIDGE_START    = datetime.now().isoformat()
+SKILLS_SH_API   = "https://skills.sh/api/v1"
 BRIDGE_BUILD_ID = "bridge_package_import_fix_2026_04_24"
 _port = 8787  # updated in cli_main
 
@@ -663,7 +664,46 @@ def run_schedule_now(schedule_id: str):
 def orchestrate(req: OrchestrateRequest):
     if not _orchestrator: raise HTTPException(503, "Orchestrator not initialised")
     try:
-        decision = _orchestrator.orchestrate(req.pipeline_context)
+        # Inject available skills so CEO knows what it can delegate
+        context = dict(req.pipeline_context)
+        try:
+            skills_resp = browse_skills_sh(limit=50)
+            context["available_skills"] = skills_resp.get("skills", [])
+        except Exception as e:
+            _log("warn", f"Skills injection failed: {e}")
+            context["available_skills"] = []
+
+        decision = _orchestrator.orchestrate(context)
+
+        # Process CEO skill delegation decisions immediately
+        if isinstance(decision, dict):
+            for d in decision.get("decisions", []):
+                if d.get("decision") == "assign_skill":
+                    skill_id = (d.get("skill_id") or d.get("skill") or "").strip()
+                    agent_id = (d.get("target_agent_id") or d.get("agent_id") or "").strip()
+                    if not skill_id:
+                        continue
+                    try:
+                        _, parsed = _skillssh_fetch(skill_id)
+                        if PROJECT and agent_id:
+                            for a in PROJECT.get("agents", []):
+                                if a.get("id") == agent_id:
+                                    existing     = a.setdefault("skills", [])
+                                    existing_ids = {s.get("id") for s in existing}
+                                    if parsed["id"] not in existing_ids:
+                                        existing.append({
+                                            "id":           parsed["id"],
+                                            "name":         parsed["name"],
+                                            "cached_path":  parsed.get("cached_path", ""),
+                                            "instructions": parsed.get("instructions", ""),
+                                            "assigned_at":  datetime.now().isoformat(),
+                                            "assigned_by":  "ceo",
+                                        })
+                                    break
+                        _log("info", f"CEO assigned skill: {skill_id} -> {agent_id}")
+                    except Exception as e:
+                        _log("warn", f"CEO assign_skill failed ({skill_id} -> {agent_id}): {e}")
+
         return decision
     except Exception as e:
         raise HTTPException(500, f"Orchestration error: {e}")
@@ -1257,8 +1297,9 @@ def _fetch_github_file(owner: str, repo: str, path: str) -> Optional[str]:
         _log("warn", f"GitHub fetch failed ({owner}/{repo}/{path}): {e}")
     return None
 
-def _parse_skill_md(content: str, owner: str, repo: str, skill_name: str) -> dict:
-    """Parse YAML frontmatter from a SKILL.md file."""
+def _parse_skill_md(content: str, owner: str = "", repo: str = "", skill_name: str = "",
+                    skill_id: str = "") -> dict:
+    """Parse YAML frontmatter from a SKILL.md file. Accepts both legacy and skills.sh id formats."""
     import re as _re
     fm_m = _re.match(r"^---\n(.*?)\n---\n(.*)", content, _re.DOTALL)
     meta = {}
@@ -1269,15 +1310,17 @@ def _parse_skill_md(content: str, owner: str, repo: str, skill_name: str) -> dic
                 k, v = line.split(":", 1)
                 meta[k.strip()] = v.strip()
         body = fm_m.group(2)
+    # Canonical id: prefer skills.sh id, fall back to legacy format
+    canon_id = skill_id or (f"{owner}/{repo}/{skill_name}".strip("/") if (owner or repo or skill_name) else "unknown")
     return {
-        "id":          f"{owner}__{repo.replace('/','_')}__{skill_name}",
-        "name":        meta.get("name", skill_name),
-        "description": meta.get("description", ""),
-        "repo":        f"{owner}/{repo}",
-        "skill_name":  skill_name,
-        "source":      "skills.sh",
+        "id":           canon_id,
+        "name":         meta.get("name", skill_name or canon_id.split("/")[-1]),
+        "description":  meta.get("description", meta.get("description", "")),
+        "repo":         f"{owner}/{repo}".strip("/"),
+        "skill_name":   skill_name or canon_id.split("/")[-1],
+        "source":       "skills.sh",
         "instructions": body.strip(),
-        "raw":         content,
+        "raw":          content,
     }
 
 @app.get("/skills")
@@ -1295,103 +1338,221 @@ def list_skills():
                 _log("error", f"Skills load error: {e}")
     return {"version": "1.0", "skills": []}
 
-@app.get("/skills/browse")
-def browse_skills_sh(limit: int = 30):
+def _skillssh_fetch(skill_id: str) -> tuple:
     """
-    Fetch trending skills from skills.sh leaderboard.
-    Parses the live leaderboard so agents always see the latest community skills.
+    Core skills.sh fetch helper.
+    Fetches full skill data from https://skills.sh/api/v1/skills/{skill_id}.
+    Returns (skill_md: str, skill_dict: dict) or raises on failure.
+    Saves SKILL.md to .rocko_skills/ for offline use and Clawd alignment.
+    """
+    import urllib.parse as _up
+    url = f"{SKILLS_SH_API}/skills/{_up.quote(skill_id, safe='/')}"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "RockoAgents/5.0",
+        "Accept":     "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=12) as r:
+        data = json.loads(r.read().decode("utf-8", errors="replace"))
+    files    = data.get("files") or []
+    skill_md = next((f["contents"] for f in files if f["path"] == "SKILL.md"), "")
+    if not skill_md:
+        raise ValueError(f"No SKILL.md in skills.sh response for {skill_id}")
+    # Save to .rocko_skills/ so Clawd-Code and _build_effective_instructions can read it
+    if PROJECT_ROOT:
+        skills_dir = Path(PROJECT_ROOT) / ".rocko_skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        safe_name  = skill_id.replace("/", "__")
+        cache_path = str(skills_dir / f"{safe_name}.md")
+        with open(cache_path, "w", encoding="utf-8") as f:
+            f.write(skill_md)
+    else:
+        cache_path = ""
+    parts = skill_id.split("/")
+    parsed = {
+        "id":           data.get("id", skill_id),
+        "name":         data.get("name") or parts[-1],
+        "slug":         data.get("slug", parts[-1]),
+        "source":       data.get("source", "/".join(parts[:2]) if len(parts) >= 2 else skill_id),
+        "installs":     data.get("installs", 0),
+        "instructions": skill_md,
+        "raw":          skill_md,
+        "cached_path":  cache_path,
+        "files":        files,
+    }
+    return skill_md, parsed
+
+
+@app.get("/skills/browse")
+def browse_skills_sh(limit: int = 30, q: str = "", view: str = "all-time"):
+    """
+    Browse/search skills from skills.sh using the official REST API.
+    GET /api/v1/skills          — leaderboard (no query)
+    GET /api/v1/skills/search   — semantic/fuzzy search (with query)
     Falls back to local skills.json if skills.sh is unreachable.
     """
-    import re as _re, urllib.request as _ur
+    import urllib.parse as _up
     try:
-        req = urllib.request.Request("https://skills.sh/",
-            headers={"User-Agent": "Mozilla/5.0 RockoAgents/5.0",
-                     "Accept": "text/html"})
+        if q:
+            params = _up.urlencode({"q": q, "limit": min(limit, 200)})
+            url = f"{SKILLS_SH_API}/skills/search?{params}"
+        else:
+            params = _up.urlencode({"view": view, "per_page": min(limit, 500), "page": 0})
+            url = f"{SKILLS_SH_API}/skills?{params}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "RockoAgents/5.0",
+            "Accept":     "application/json",
+        })
         with urllib.request.urlopen(req, timeout=10) as r:
-            content = r.read().decode("utf-8", errors="replace")
-        # Parse leaderboard entries: ###skill-name\nowner/repo\nNNNK installs
-        entries = _re.findall(
-            r"###\s+(\S+)\n([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)\n([\d.]+[KM]?)",
-            content)
-        skills = []
-        seen = set()
-        for skill_name, repo, installs in entries:
-            key = f"{repo}/{skill_name}"
-            if key in seen: continue
-            seen.add(key)
-            skills.append({
-                "id":          f"{repo.replace('/','__')}__{skill_name}",
-                "name":        skill_name.replace("-", " ").title(),
-                "skill_name":  skill_name,
-                "repo":        repo,
-                "installs":    installs,
-                "description": f"From {repo} - install with: npx skills add {repo}",
-                "source":      "skills.sh",
-            })
-            if len(skills) >= limit: break
+            data = json.loads(r.read().decode("utf-8", errors="replace"))
+        raw = data.get("data", [])
+        skills = [
+            {
+                "id":          s.get("id", ""),
+                "name":        s.get("name", s.get("slug", "")),
+                "slug":        s.get("slug", ""),
+                "source":      s.get("source", ""),
+                "installs":    s.get("installs", 0),
+                "url":         s.get("url", ""),
+                "install_url": s.get("installUrl", ""),
+                "source_type": s.get("sourceType", "github"),
+                "description": s.get("description", ""),
+            }
+            for s in raw
+            if not s.get("isDuplicate")
+        ]
+        total = data.get("pagination", {}).get("total", len(skills))
         _log("info", f"Fetched {len(skills)} skills from skills.sh")
-        return {"skills": skills, "source": "skills.sh", "total": len(skills)}
+        return {"skills": skills, "source": "skills.sh", "total": total}
     except Exception as e:
-        _log("warn", f"skills.sh unreachable: {e} - falling back to local")
+        _log("warn", f"skills.sh unreachable: {e} — falling back to local skills.json")
         return list_skills()
 
 @app.get("/skills/fetch")
-def fetch_skill(repo: str, skill: str):
+def fetch_skill(id: str = "", source: str = "", slug: str = "", repo: str = "", skill: str = ""):
     """
-    Fetch a SKILL.md from GitHub and return its parsed content.
-    repo format: owner/repo  (e.g. anthropics/skills)
-    skill: skill directory name (e.g. frontend-design)
-    Tries common paths: {skill}/SKILL.md, skills/{skill}/SKILL.md
+    Fetch a skill's full SKILL.md content from skills.sh official API.
+    Use the id field from browse results: e.g. id=anthropics/skills/frontend-design
+    GET https://skills.sh/api/v1/skills/{id}
+    Falls back to GitHub raw fetch for skills not yet snapshotted on skills.sh.
     """
-    owner, reponame = repo.split("/", 1) if "/" in repo else (repo, repo)
-    paths_to_try = [
-        f"{skill}/SKILL.md",
-        f"skills/{skill}/SKILL.md",
-        f".claude/skills/{skill}/SKILL.md",
-    ]
-    for path in paths_to_try:
-        content = _fetch_github_file(owner, reponame, path)
-        if content:
-            parsed = _parse_skill_md(content, owner, reponame, skill)
-            return {"ok": True, "skill": parsed}
-    raise HTTPException(404, f"SKILL.md not found in {repo} for skill '{skill}'")
+    # Resolve canonical skill id from whichever params were provided
+    resolved = (id or slug or
+                (f"{source}/{skill}".strip("/") if source and skill else "") or
+                (f"{repo}/{skill}".strip("/") if repo and skill else ""))
+    if not resolved:
+        raise HTTPException(400, "Provide id (e.g. anthropics/skills/frontend-design)")
+    # Try skills.sh API first
+    try:
+        _, parsed = _skillssh_fetch(resolved)
+        return {"ok": True, "skill": parsed}
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise HTTPException(500, f"skills.sh error {e.code} for {resolved}")
+        _log("warn", f"skills.sh: {resolved} not snapshotted (404) — trying GitHub fallback")
+    except Exception as e:
+        _log("warn", f"skills.sh fetch failed for {resolved}: {e} — trying GitHub fallback")
+
+    # GitHub fallback
+    if repo and skill:
+        owner, reponame = repo.split("/", 1) if "/" in repo else (repo, repo)
+        for path in [f"{skill}/SKILL.md", f"skills/{skill}/SKILL.md", f".claude/skills/{skill}/SKILL.md"]:
+            gh_content = _fetch_github_file(owner, reponame, path)
+            if gh_content:
+                parsed = _parse_skill_md(gh_content, owner, reponame, skill)
+                return {"ok": True, "skill": parsed}
+
+    raise HTTPException(404, f"Skill not found: {resolved_slug}")
 
 @app.post("/skills/assign")
 async def assign_skill(request: Request):
     """
-    Assign a skill from GitHub to an agent.
-    Body: {repo, skill_name, agent_id, project_name}
-    Fetches SKILL.md, stores it locally, returns the parsed skill.
+    Assign a skill to an agent.
+    Accepts new format: {id, agent_id}          e.g. id=anthropics/skills/frontend-design
+    Accepts legacy format: {repo, skill_name, agent_id}
+    Fetches SKILL.md from skills.sh, saves to .rocko_skills/, updates agent record.
     """
-    body = await request.json()
-    repo       = body.get("repo", "")
-    skill_name = body.get("skill_name", "")
+    body       = await request.json()
     agent_id   = body.get("agent_id", "")
-    if not repo or not skill_name:
-        raise HTTPException(400, "repo and skill_name required")
-    owner, reponame = repo.split("/", 1) if "/" in repo else (repo, repo)
-    paths_to_try = [f"{skill_name}/SKILL.md", f"skills/{skill_name}/SKILL.md"]
-    content = None
-    for path in paths_to_try:
-        content = _fetch_github_file(owner, reponame, path)
-        if content: break
-    if not content:
-        raise HTTPException(404, f"Could not fetch SKILL.md for {repo}/{skill_name}")
-    parsed = _parse_skill_md(content, owner, reponame, skill_name)
-    # Save skill locally for offline use
-    if PROJECT_ROOT:
-        skills_dir = Path(PROJECT_ROOT) / ".rocko_skills"
-        skills_dir.mkdir(parents=True, exist_ok=True)
-        skill_file = skills_dir / f"{owner}__{reponame}__{skill_name}.md"
-        with open(skill_file, "w") as f:
-            f.write(content)
-    _log("info", f"Skill assigned: {repo}/{skill_name} -> agent {agent_id}")
+    # Resolve skill id — new format takes priority
+    skill_id   = (body.get("id") or body.get("skill_id") or "").strip()
+    if not skill_id:
+        repo       = body.get("repo", "")
+        skill_name = body.get("skill_name", "")
+        if repo and skill_name:
+            skill_id = f"{repo}/{skill_name}".strip("/")
+    if not skill_id:
+        raise HTTPException(400, "Provide id (e.g. anthropics/skills/frontend-design) or repo+skill_name")
+    try:
+        _, parsed = _skillssh_fetch(skill_id)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            # GitHub fallback for skills not yet on skills.sh
+            parts = skill_id.split("/")
+            if len(parts) >= 3:
+                owner_gh = parts[0]; repo_gh = parts[1]; sname_gh = "/".join(parts[2:])
+                for path in [f"{sname_gh}/SKILL.md", f"skills/{sname_gh}/SKILL.md"]:
+                    gh_raw = _fetch_github_file(owner_gh, repo_gh, path)
+                    if gh_raw:
+                        parsed = _parse_skill_md(gh_raw, owner_gh, repo_gh, sname_gh, skill_id=skill_id)
+                        break
+                else:
+                    raise HTTPException(404, f"Skill not found: {skill_id}")
+            else:
+                raise HTTPException(404, f"Skill not found: {skill_id}")
+        else:
+            raise HTTPException(500, f"skills.sh error {e.code}")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch skill {skill_id}: {e}")
+    # Attach skill to agent record in PROJECT
+    if PROJECT and agent_id:
+        for a in PROJECT.get("agents", []):
+            if a.get("id") == agent_id:
+                existing     = a.setdefault("skills", [])
+                existing_ids = {s.get("id") for s in existing}
+                if parsed["id"] not in existing_ids:
+                    existing.append({
+                        "id":           parsed["id"],
+                        "name":         parsed["name"],
+                        "skill_name":   parsed.get("slug", parsed["id"].split("/")[-1]),
+                        "source":       parsed.get("source", "skills.sh"),
+                        "cached_path":  parsed.get("cached_path", ""),
+                        "instructions": parsed.get("instructions", ""),
+                        "assigned_at":  datetime.now().isoformat(),
+                        "agent_id":     agent_id,
+                    })
+                break
+    _log("info", f"Skill assigned: {skill_id} -> agent {agent_id}")
     return {"ok": True, "skill": parsed, "agent_id": agent_id}
 
 @app.post("/skills/{skill_id}/apply/{agent_id}")
 async def apply_skill_legacy(skill_id: str, agent_id: str, request: Request):
-    return {"ok": True, "skill_id": skill_id, "agent_id": agent_id,
-            "applied_at": datetime.now().isoformat()}
+    """
+    Legacy apply endpoint — delegates to assign_skill using skills.sh id.
+    skill_id path param is treated as skills.sh id (owner/repo/slug, URL-encoded).
+    """
+    import urllib.parse as _up
+    decoded_id = _up.unquote(skill_id)
+    try:
+        _, parsed = _skillssh_fetch(decoded_id)
+        if PROJECT and agent_id:
+            for a in PROJECT.get("agents", []):
+                if a.get("id") == agent_id:
+                    existing     = a.setdefault("skills", [])
+                    existing_ids = {s.get("id") for s in existing}
+                    if parsed["id"] not in existing_ids:
+                        existing.append({
+                            "id":           parsed["id"],
+                            "name":         parsed["name"],
+                            "cached_path":  parsed.get("cached_path", ""),
+                            "instructions": parsed.get("instructions", ""),
+                            "assigned_at":  datetime.now().isoformat(),
+                        })
+                    break
+        _log("info", f"Skill applied (legacy): {decoded_id} -> {agent_id}")
+        return {"ok": True, "skill": parsed, "agent_id": agent_id,
+                "applied_at": datetime.now().isoformat()}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to apply skill {decoded_id}: {e}")
 
 
 
@@ -1441,37 +1602,39 @@ def _register_agent_in_project(agent_def: dict, file_path: str) -> dict:
     return new_agent
 
 def _assign_skills_to_agent(agent_id: str, skills: list) -> list:
+    """
+    Assign a list of skills to an agent using skills.sh API.
+    Each skill_ref can be:
+      {"id": "anthropics/skills/frontend-design"}        — preferred
+      {"repo": "anthropics/skills", "skill_name": "frontend-design"}  — legacy
+    """
     if not skills: return []
     assigned = []
     for skill_ref in skills:
-        repo       = skill_ref.get("repo","")
-        skill_name = skill_ref.get("skill_name","")
-        if not repo or not skill_name: continue
+        # Resolve skill id
+        skill_id = (skill_ref.get("id") or skill_ref.get("skill_id") or "").strip()
+        if not skill_id:
+            repo       = skill_ref.get("repo", "")
+            skill_name = skill_ref.get("skill_name", "")
+            if repo and skill_name:
+                skill_id = f"{repo}/{skill_name}".strip("/")
+        if not skill_id:
+            continue
         try:
-            owner, reponame = repo.split("/",1) if "/" in repo else (repo, repo)
-            content = None
-            for path in [f"{skill_name}/SKILL.md", f"skills/{skill_name}/SKILL.md"]:
-                content = _fetch_github_file(owner, reponame, path)
-                if content: break
-            if content:
-                parsed = _parse_skill_md(content, owner, reponame, skill_name)
-                cache_path = ""
-                if PROJECT_ROOT:
-                    skills_dir = Path(PROJECT_ROOT) / ".rocko_skills"
-                    skills_dir.mkdir(parents=True, exist_ok=True)
-                    cf = skills_dir / f"{owner}__{reponame}__{skill_name}.md"
-                    with open(cf, "w") as f: f.write(content)
-                    cache_path = str(cf)
-                assigned.append({
-                    "id": parsed["id"], "name": parsed["name"], "repo": repo,
-                    "skill_name": skill_name, "source": "skills.sh",
-                    "cached_path": cache_path, "agent_id": agent_id,
-                    "assigned_at": datetime.now().isoformat(),
-                    "instructions": parsed.get("instructions",""),
-                })
-                _log("info", f"Skill assigned: {repo}/{skill_name} -> {agent_id}")
+            _, parsed = _skillssh_fetch(skill_id)
+            assigned.append({
+                "id":           parsed["id"],
+                "name":         parsed["name"],
+                "skill_name":   parsed.get("slug", skill_id.split("/")[-1]),
+                "source":       "skills.sh",
+                "cached_path":  parsed.get("cached_path", ""),
+                "agent_id":     agent_id,
+                "assigned_at":  datetime.now().isoformat(),
+                "instructions": parsed.get("instructions", ""),
+            })
+            _log("info", f"Skill assigned via skills.sh: {skill_id} -> {agent_id}")
         except Exception as e:
-            _log("warn", f"Skill error {repo}/{skill_name}: {e}")
+            _log("warn", f"Skill assign failed for {skill_id}: {e}")
     return assigned
 
 def _build_effective_instructions(agent_id: str) -> str:
