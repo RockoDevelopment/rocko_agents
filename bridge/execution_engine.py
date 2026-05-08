@@ -32,6 +32,29 @@ AGENT.md instructions, company policy, and pipeline config.
 Works for: trading, research, content, support, coding,
            data analysis, operations, sales - same engine, zero changes.
 """
+# ====================== WINDOWS PACKAGED EXE SSL FIX ======================
+import ssl
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+# ========================================================================
+
+# PyInstaller hidden-import hints for Clawd-Code.
+# These optional imports are intentionally guarded so source runs still work
+# when Clawd-Code is not installed/cloned yet. Add these same namespaces to
+# your .spec/build.py hiddenimports for packaged executables:
+#   src.skills.*, src.tool_system.*, src.providers.*, src.agent.*
+try:  # pragma: no cover - packaging hint only
+    import src.skills.loader      # noqa: F401
+    import src.skills.model       # noqa: F401
+    import src.tool_system.loader # noqa: F401
+    import src.tool_system.agent_loop  # noqa: F401
+    import src.providers          # noqa: F401
+    import src.agent.conversation # noqa: F401
+except Exception:
+    pass
+
 import json, os, subprocess, sys, time, uuid, urllib.request, urllib.error
 from datetime import datetime
 from pathlib import Path
@@ -370,7 +393,13 @@ class NativeExecutionEngine:
                 self._log(f"Clawd skills load warning: {e}")
 
         if not parts:
-            self._log("No skills loaded (none in .rocko_skills/ or Clawd dirs)")
+            self._log("No skills loaded — checked .rocko_skills/ and Clawd-Code dirs; using default fallback skill")
+            parts.append(
+                "\n\n---\n"
+                "## Skill: default_fallback\n"
+                "You are a helpful RockoAgents execution agent. Follow the agent instructions, "
+                "respect project boundaries, preserve existing functionality, and return clear results."
+            )
 
         return "".join(parts)
 
@@ -690,6 +719,19 @@ class NativeExecutionEngine:
                     })
             except Exception as e:
                 self._log(f"get_available_skills Clawd error: {e}")
+
+        if not result:
+            self._log("No skills discovered — returning built-in default skill so UI stays stable")
+            result = [
+                {
+                    "id": "default",
+                    "name": "Default Agent",
+                    "description": "Basic execution fallback used when no local or Clawd-Code skills are available.",
+                    "loaded_from": "builtin",
+                    "source": "builtin",
+                    "cached": False,
+                }
+            ]
 
         return result
 

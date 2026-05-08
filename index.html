@@ -961,10 +961,37 @@ body { display:flex; flex-direction:row; overflow:hidden; }
             <div class="field-group"><div class="field-label">Local Script Path</div><input class="field-input" id="editorScriptPath" placeholder="core/agents/my_agent/run.py" /></div>
             <div class="field-group"><div class="field-label">Entry Point</div><input class="field-input" id="editorEntryPoint" placeholder="run_agent" /></div>
           </div>
-          <div class="field-group"><div class="field-label">Connections</div>
-            <div class="connections-area"><div class="conn-chips" id="editorConnections"><button class="conn-add" onclick="addConn()">+ Add</button></div></div>
+          <div class="field-group">
+            <div class="field-label">Connections</div>
+            <div id="agentConnectionsPanel" style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+              <div id="telegramConnRow" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:14px;">✈</span>
+                  <div>
+                    <div style="font-size:12px;font-weight:600;">Telegram</div>
+                    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);" id="telegramStatus">Not connected</div>
+                  </div>
+                </div>
+                <button class="btn btn-ghost" style="font-size:10px;padding:3px 10px;" id="telegramConnBtn" onclick="toggleTelegramConnection()">Connect</button>
+              </div>
+              <div id="whatsappConnRow" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:14px;">💬</span>
+                  <div>
+                    <div style="font-size:12px;font-weight:600;">WhatsApp</div>
+                    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);" id="whatsappStatus">Not connected</div>
+                  </div>
+                </div>
+                <button class="btn btn-ghost" style="font-size:10px;padding:3px 10px;" id="whatsappConnBtn" onclick="toggleWhatsappConnection()">Connect</button>
+              </div>
+            </div>
           </div>
-          <div class="field-group"><div class="field-label">Skills</div><input class="field-input" id="editorTags" placeholder="e.g. marketing, research" /></div>
+          <div class="field-group">
+            <div class="field-label">Skills</div>
+            <div id="agentSkillsDisplay" style="display:flex;flex-wrap:wrap;gap:6px;min-height:28px;padding:6px 0;">
+              <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">No skills assigned</span>
+            </div>
+          </div>
         </div>
         <div class="editor-sidebar">
           <div class="meta-block">
@@ -2737,7 +2764,37 @@ function openAgent(id){
   document.getElementById('editorStep').value=a.pipeline_step||'';
   document.getElementById('editorScriptPath').value=a.local_code?.script_path||'';
   document.getElementById('editorEntryPoint').value=a.local_code?.entry||a.local_code?.entry_point||'';
-  document.getElementById('editorTags').value=(a.skills||a.tags||[]).join(', ');
+  var agentSkillsEl = document.getElementById('agentSkillsDisplay');
+  if(agentSkillsEl){
+    var assignedSkills = a.skills || [];
+    if(assignedSkills.length){
+      agentSkillsEl.innerHTML = assignedSkills.map(function(s){
+        var name = typeof s === 'string' ? s : (s.name || s.skill_name || s.id || String(s));
+        return '<span style="font-family:var(--mono);font-size:10px;padding:3px 8px;background:var(--accent-dim);color:var(--accent);border-radius:3px;border:1px solid rgba(71,130,255,.3);">' + name + '</span>';
+      }).join('');
+    } else {
+      agentSkillsEl.innerHTML = '<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">No skills assigned</span>';
+    }
+  }
+  var isCEO = a.role === 'ceo';
+  var tgRow = document.getElementById('telegramConnRow');
+  var tgBtn = document.getElementById('telegramConnBtn');
+  var tgStatus = document.getElementById('telegramStatus');
+  var waBtn = document.getElementById('whatsappConnBtn');
+  var waStatus = document.getElementById('whatsappStatus');
+  if(tgRow){
+    if(!isCEO){
+      tgRow.style.opacity='0.4'; tgRow.title='Telegram is CEO only';
+      if(tgBtn){tgBtn.disabled=true;tgBtn.textContent='CEO Only';}
+    } else {
+      tgRow.style.opacity='1'; tgRow.title='';
+      if(tgBtn){tgBtn.disabled=false;}
+    }
+  }
+  if(tgStatus){tgStatus.textContent=a.telegram_connected?'Connected — @'+(a.telegram_handle||'bot'):'Not connected';}
+  if(tgBtn&&isCEO){tgBtn.textContent=a.telegram_connected?'Disconnect':'Connect';}
+  if(waStatus){waStatus.textContent=a.whatsapp_connected?'Connected — '+(a.whatsapp_number||''):'Not connected';}
+  if(waBtn){waBtn.textContent=a.whatsapp_connected?'Disconnect':'Connect';}
   document.getElementById('metaId').textContent=a.id;
   document.getElementById('metaProject').textContent=a.project;
   document.getElementById('metaProvider').textContent=a.provider_key||a.provider||'—';
@@ -2793,14 +2850,7 @@ function saveAgent(){
     status:editorStatus,
     connections:editorConns,
     outputs_to:editorConns,
-    skills:document.getElementById('editorTags').value
-      .split(',')
-      .map(s=>s.trim())
-      .filter(Boolean),
-    tags:document.getElementById('editorTags').value
-      .split(',')
-      .map(s=>s.trim())
-      .filter(Boolean),
+    // skills assigned via CEO delegation or skills panel — not user-typed
     apis:[],
     project_tools:['filesystem','http']
   });
@@ -5263,6 +5313,43 @@ function renderSkillsTab() {
     '</div>';
   });
   el.innerHTML = html;
+}
+
+function toggleTelegramConnection() {
+  var a = RockoCore.getAgent(currentAgentId);
+  if (!a) return;
+  if (a.role !== 'ceo') { toastErr('Telegram is only available on the CEO agent.'); return; }
+  if (a.telegram_connected) {
+    RockoCore.updateAgent(currentAgentId, {telegram_connected:false, telegram_handle:''});
+    var s=document.getElementById('telegramStatus'), b=document.getElementById('telegramConnBtn');
+    if(s)s.textContent='Not connected'; if(b)b.textContent='Connect';
+    toastOk('Telegram disconnected.');
+  } else {
+    var handle = prompt('Enter your Telegram Bot Token:');
+    if (!handle) return;
+    RockoCore.updateAgent(currentAgentId, {telegram_connected:true, telegram_handle:handle});
+    var s=document.getElementById('telegramStatus'), b=document.getElementById('telegramConnBtn');
+    if(s)s.textContent='Connected — @'+handle; if(b)b.textContent='Disconnect';
+    toastOk('Telegram connected.');
+  }
+}
+
+function toggleWhatsappConnection() {
+  var a = RockoCore.getAgent(currentAgentId);
+  if (!a) return;
+  if (a.whatsapp_connected) {
+    RockoCore.updateAgent(currentAgentId, {whatsapp_connected:false, whatsapp_number:''});
+    var s=document.getElementById('whatsappStatus'), b=document.getElementById('whatsappConnBtn');
+    if(s)s.textContent='Not connected'; if(b)b.textContent='Connect';
+    toastOk('WhatsApp disconnected.');
+  } else {
+    var number = prompt('Enter your WhatsApp number (e.g. +14155552671):');
+    if (!number) return;
+    RockoCore.updateAgent(currentAgentId, {whatsapp_connected:true, whatsapp_number:number});
+    var s=document.getElementById('whatsappStatus'), b=document.getElementById('whatsappConnBtn');
+    if(s)s.textContent='Connected — '+number; if(b)b.textContent='Disconnect';
+    toastOk('WhatsApp connected.');
+  }
 }
 
 function copySkillId(btn) {

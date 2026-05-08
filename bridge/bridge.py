@@ -3,6 +3,14 @@ RockoAgents Executor Bridge v5.0
 Integrates: scheduler, task worker, CEO orchestrator, model manager.
 Run: python bridge.py --port 8787
 """
+# ====================== WINDOWS PACKAGED EXE SSL FIX ======================
+import ssl
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+# ========================================================================
+
 import urllib.request
 import argparse, json, os, subprocess, sys, threading, time, traceback, uuid, webbrowser
 from datetime import datetime
@@ -289,7 +297,7 @@ def run_executor_sync(eid: str, context: Dict, env_overrides: Dict = {}, dry_run
 
 # -- Subsystem init ------------------------------------------------------------
 def _init_subsystems():
-    global _model_mgr, _task_worker, _scheduler, _orchestrator
+    global _model_mgr, _task_worker, _scheduler, _orchestrator, _runtime_mgr, _exec_engine
     from bridge import model_manager as mm
     env = build_env()
     mm.init(PROJECT, env)
@@ -351,6 +359,7 @@ def _init_subsystems():
     # Re-init task worker with runtime support
     _task_worker._runtime_fn = lambda rid, ctx, aid: _runtime_mgr.execute(rid, ctx, aid)
 
+    _ensure_skills_bootstrap()
     _load_pipeline_runs()
     _auto_migrate_paperteam()
     _log("info", "All subsystems initialised")
@@ -766,37 +775,6 @@ def model_config():
     safe["providers"] = {k: {kk: vv for kk, vv in v.items() if "key" not in kk.lower()}
                          for k, v in cfg.get("providers", {}).items()}
     return safe
-
-# -- Runtime routes ------------------------------------------------------------
-@app.get("/runtimes")
-def list_runtimes():
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    return {"runtimes": _runtime_mgr.list_runtimes(), "count": len(_runtime_mgr.list_runtimes())}
-
-@app.get("/runtimes/{runtime_id}")
-def get_runtime(runtime_id: str):
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    rt = _runtime_mgr.get_runtime(runtime_id)
-    if not rt: raise HTTPException(404, f"Runtime '{runtime_id}' not found")
-    return rt
-
-@app.post("/runtimes/{runtime_id}/test")
-def test_runtime(runtime_id: str):
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    return _runtime_mgr.execute(runtime_id, {"_test": True}, dry_run=True)
-
-@app.post("/runtimes/{runtime_id}/run")
-def run_runtime(runtime_id: str, req: RuntimeRunRequest):
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    perm = _runtime_mgr.check_permission(runtime_id, req.agent_id)
-    if not perm["allowed"]:
-        raise HTTPException(403, perm["reason"])
-    if perm.get("requires_approval") and not req.dry_run:
-        return {"ok": False, "requires_approval": True,
-                "message": f"Runtime '{runtime_id}' requires human approval before execution",
-                "runtime_id": runtime_id}
-    return _runtime_mgr.execute(runtime_id, req.context, req.agent_id, req.dry_run)
-
 
 # -- Runtime endpoints ---------------------------------------------------------
 @app.get("/runtimes")
@@ -1326,65 +1304,125 @@ def _parse_skill_md(content: str, owner: str = "", repo: str = "", skill_name: s
         "raw":          content,
     }
 
+
+def _default_skills_library() -> Dict[str, Any]:
+    """Small bundled library used when skills.json/cache/network are unavailable."""
+    return {
+        "version": "1.0",
+        "skills": [
+            {"id": "vercel-labs/skills/find-skills", "name": "Find Skills", "description": "Discover and install useful agent skills", "source": "bundled"},
+            {"id": "anthropics/skills/frontend-design", "name": "Frontend Design", "description": "Modern UI/UX patterns and frontend best practices", "source": "bundled"},
+            {"id": "anthropics/skills/skill-creator", "name": "Skill Creator", "description": "Create and refine custom agent skills", "source": "bundled"},
+            {"id": "obra/superpowers", "name": "Superpowers", "description": "Business, product, planning, and execution workflows", "source": "bundled"},
+            {"id": "mattpocock/skills/to-prd", "name": "To PRD", "description": "Turn product ideas into clear requirements", "source": "bundled"},
+            {"id": "mattpocock/skills/to-issues", "name": "To Issues", "description": "Break plans into actionable engineering issues", "source": "bundled"},
+            {"id": "coreyhaines31/marketingskills/seo-audit", "name": "SEO Audit", "description": "Technical and content SEO analysis", "source": "bundled"},
+            {"id": "vercel-labs/agent-skills/web-design-guidelines", "name": "Web Design Guidelines", "description": "Professional web design systems and standards", "source": "bundled"},
+            {"id": "supabase/agent-skills/supabase-postgres-best-practices", "name": "Supabase Best Practices", "description": "Supabase and Postgres startup patterns", "source": "bundled"},
+            {"id": "xixu-me/skills/github-actions-docs", "name": "GitHub Actions", "description": "CI/CD workflow expertise", "source": "bundled"},
+        ],
+        "source": "bundled_fallback"
+    }
+
+
+def _ensure_skills_bootstrap() -> None:
+    """Create the skills cache folder and a starter skills.json if a project is loaded."""
+    targets = []
+    if PROJECT_ROOT:
+        targets.append(Path(PROJECT_ROOT))
+    targets.append(ROCKO_ROOT)
+
+    for base in targets:
+        try:
+            (base / ".rocko_skills").mkdir(parents=True, exist_ok=True)
+            skills_json = base / "skills.json"
+            if not skills_json.exists():
+                with open(skills_json, "w", encoding="utf-8") as f:
+                    json.dump(_default_skills_library(), f, indent=2)
+                _log("info", f"Created default skills.json at {skills_json}")
+        except Exception as e:
+            _log("warn", f"Could not initialise skills cache at {base}: {e}")
+
 @app.get("/skills")
 def list_skills():
     """
-    Load skills from local sources — fast, no network required.
-    Reads from (in priority order):
-      1. skills.json in project root or bridge root
-      2. .rocko_skills/ directory (skills fetched from skills.sh and saved to disk)
-      3. ~/.clawd/skills/ directory (Clawd-Code installed skills)
+    Always return skills so the UI never treats an empty list as a bridge failure.
+    Priority: project skills.json -> bundled skills.json -> .rocko_skills -> ~/.clawd/skills -> bundled fallback.
     """
-    # Try skills.json first
     search_paths = []
     if PROJECT_ROOT:
         search_paths.append(Path(PROJECT_ROOT) / "skills.json")
     search_paths.append(ROCKO_ROOT / "skills.json")
+
     for sp in search_paths:
         if sp.exists():
             try:
-                data = json.load(open(sp))
-                if data.get("skills"):
+                with open(sp, encoding="utf-8") as f:
+                    data = json.load(f)
+                skills = data.get("skills", []) if isinstance(data, dict) else []
+                if skills:
+                    _log("info", f"Loaded {len(skills)} skills from {sp}")
                     return data
-            except Exception:
-                pass
+                _log("warn", f"skills.json exists but contains no skills: {sp}")
+            except Exception as e:
+                _log("warn", f"Failed to load skills.json at {sp}: {e}")
 
-    # Build from local skill directories
     skills = []
-    seen   = set()
+    seen = set()
 
-    # .rocko_skills/ — skills previously fetched from skills.sh
     rocko_dirs = []
     if PROJECT_ROOT:
         rocko_dirs.append(Path(PROJECT_ROOT) / ".rocko_skills")
     rocko_dirs.append(ROCKO_ROOT / ".rocko_skills")
-    for rdir in rocko_dirs:
-        if rdir.exists():
-            for f in sorted(rdir.glob("*.md")):
-                name = f.stem.split("__")[-1]
-                sid  = f.stem.replace("__", "/")
-                if sid not in seen:
-                    seen.add(sid)
-                    skills.append({"id": sid, "name": name, "source": sid,
-                                   "description": "", "installs": 0,
-                                   "source_type": "local", "cached": True})
 
-    # ~/.clawd/skills/ — Clawd-Code installed skills
+    for rdir in rocko_dirs:
+        try:
+            rdir.mkdir(parents=True, exist_ok=True)
+            for f in sorted(rdir.glob("*.md")):
+                sid = f.stem.replace("__", "/")
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                name = f.stem.split("__")[-1].replace("-", " ").replace("_", " ").title()
+                skills.append({
+                    "id": sid,
+                    "name": name,
+                    "source": "local_cache",
+                    "description": "Cached SKILL.md file",
+                    "installs": 0,
+                    "source_type": "local",
+                    "cached": True,
+                    "cached_path": str(f),
+                })
+        except Exception as e:
+            _log("warn", f"Local skills cache unavailable at {rdir}: {e}")
+
     clawd_dir = Path.home() / ".clawd" / "skills"
     if clawd_dir.exists():
-        for skill_dir in sorted(clawd_dir.iterdir()):
-            skill_md = skill_dir / "SKILL.md"
-            if skill_md.exists() and skill_dir.name not in seen:
-                seen.add(skill_dir.name)
-                skills.append({"id": skill_dir.name, "name": skill_dir.name,
-                                "source": "~/.clawd/skills", "description": "",
-                                "installs": 0, "source_type": "local", "cached": True})
+        try:
+            for skill_dir in sorted(clawd_dir.iterdir()):
+                skill_md = skill_dir / "SKILL.md"
+                if skill_md.exists() and skill_dir.name not in seen:
+                    seen.add(skill_dir.name)
+                    skills.append({
+                        "id": skill_dir.name,
+                        "name": skill_dir.name.replace("-", " ").replace("_", " ").title(),
+                        "source": "clawd",
+                        "description": "Installed Clawd-Code skill",
+                        "installs": 0,
+                        "source_type": "local",
+                        "cached": True,
+                        "cached_path": str(skill_md),
+                    })
+        except Exception as e:
+            _log("warn", f"Clawd skills cache unavailable: {e}")
 
     if skills:
-        _log("info", f"Loaded {len(skills)} local skill(s)")
-        return {"version": "1.0", "skills": skills, "source": "local"}
+        _log("info", f"Loaded {len(skills)} local cached skill(s)")
+        return {"version": "1.0", "skills": skills, "source": "local_cache"}
 
-    return {"version": "1.0", "skills": []}
+    _log("info", "No skills.json or cache found — using bundled fallback skills")
+    return _default_skills_library()
 
 def _skillssh_fetch(skill_id: str) -> tuple:
     """
@@ -1472,6 +1510,9 @@ def browse_skills_sh(limit: int = 30, q: str = "", view: str = "all-time"):
             if not s.get("isDuplicate")
         ]
         total = data.get("pagination", {}).get("total", len(skills))
+        if not skills:
+            _log("warn", "skills.sh returned no skills — falling back to local/bundled skills")
+            return list_skills()
         _log("info", f"Fetched {len(skills)} skills from skills.sh")
         return {"skills": skills, "source": "skills.sh", "total": total}
     except urllib.error.HTTPError as e:
@@ -1521,7 +1562,7 @@ def fetch_skill(id: str = "", source: str = "", slug: str = "", repo: str = "", 
                 parsed = _parse_skill_md(gh_content, owner, reponame, skill)
                 return {"ok": True, "skill": parsed}
 
-    raise HTTPException(404, f"Skill not found: {resolved_slug}")
+    raise HTTPException(404, f"Skill not found: {resolved}")
 
 @app.post("/skills/assign")
 async def assign_skill(request: Request):
@@ -1806,6 +1847,7 @@ async def validate_provider_endpoint(provider_id: str, request: Request):
 
 def cli_main(argv=None):
     """Callable entry point - used by PyInstaller exe and rockoagents.cli"""
+    global VERBOSE
     import sys as _s
     if argv is not None:
         _s.argv = argv
@@ -1841,9 +1883,12 @@ def cli_main(argv=None):
         print(f"  Subsystem warning: {e}")
 
     # Run validation silently - results available at /validate endpoint
+    validation_result = {"errors": [], "warns": []}
     if ok:
-        try: validate_project()
-        except: pass
+        try:
+            validation_result = validate_project()
+        except Exception:
+            validation_result = {"errors": [], "warns": []}
     print()
 
     # -- Open app window ----------------------------------------------------
@@ -1902,8 +1947,8 @@ def cli_main(argv=None):
     if args.verbose:
         print(f"|  [verbose] Project root: {PROJECT_ROOT or 'none'}")
         print(f"|  [verbose] Data dir:     {DATA_DIR}")
-        for e in v.get("errors", []): print(f"|  FAIL {e}")
-        for w in v.get("warns",  []): print(f"|  WARN {w}")
+        for e in validation_result.get("errors", []): print(f"|  FAIL {e}")
+        for w in validation_result.get("warns",  []): print(f"|  WARN {w}")
         print("|")
     if not args.no_browser:
         print(f"+  RockoAgents is ready.")

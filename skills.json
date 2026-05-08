@@ -1,0 +1,240 @@
+{
+  "version": "1.0",
+  "skills": [
+    {
+      "id": "vercel-labs/skills/find-skills",
+      "name": "Find Skills",
+      "description": "Discover and install the best agent skills — essential meta skill",
+      "source": "skills.sh",
+      "installs": 1400000
+    },
+    {
+      "id": "anthropics/skills/frontend-design",
+      "name": "Frontend Design",
+      "description": "Modern UI/UX patterns and frontend best practices",
+      "source": "skills.sh",
+      "installs": 380900
+    },
+    {
+      "id": "vercel-labs/agent-skills/vercel-react-best-practices",
+      "name": "Vercel React Best Practices",
+      "description": "Production React/Next.js patterns from Vercel Engineering",
+      "source": "skills.sh",
+      "installs": 380600
+    },
+    {
+      "id": "vercel-labs/agent-skills/web-design-guidelines",
+      "name": "Web Design Guidelines",
+      "description": "Professional web design systems and standards",
+      "source": "skills.sh",
+      "installs": 303400
+    },
+    {
+      "id": "microsoft/azure-skills/microsoft-foundry",
+      "name": "Microsoft Foundry",
+      "description": "Azure AI, cloud, and enterprise tooling",
+      "source": "skills.sh",
+      "installs": 298200
+    },
+    {
+      "id": "remotion-dev/skills/remotion-best-practices",
+      "name": "Remotion Best Practices",
+      "description": "Programmatic video and animation creation",
+      "source": "skills.sh",
+      "installs": 294500
+    },
+    {
+      "id": "vercel-labs/agent-browser",
+      "name": "Agent Browser",
+      "description": "Browser automation and web interaction",
+      "source": "skills.sh",
+      "installs": 248100
+    },
+    {
+      "id": "microsoft/azure-skills/azure-messaging",
+      "name": "Azure Messaging",
+      "description": "Enterprise messaging and event systems",
+      "source": "skills.sh",
+      "installs": 286200
+    },
+    {
+      "id": "microsoft/azure-skills/azure-hosted-copilot-sdk",
+      "name": "Azure Copilot SDK",
+      "description": "Integrate Azure AI copilots",
+      "source": "skills.sh",
+      "installs": 269700
+    },
+    {
+      "id": "microsoft/azure-skills/azure-compute",
+      "name": "Azure Compute",
+      "description": "Cloud compute and scaling operations",
+      "source": "skills.sh",
+      "installs": 240700
+    },
+
+    {
+      "id": "anthropics/skills/skill-creator",
+      "name": "Skill Creator",
+      "description": "Build and refine custom agent skills",
+      "source": "skills.sh",
+      "installs": 190300
+    },
+    {
+      "id": "vercel-labs/agent-skills/vercel-composition-patterns",
+      "name": "Vercel Composition Patterns",
+      "description": "Advanced architecture and component patterns",
+      "source": "skills.sh",
+      "installs": 164200
+    },
+    {
+      "id": "supabase/agent-skills/supabase-postgres-best-practices",
+      "name": "Supabase Best Practices",
+      "description": "Supabase + Postgres for startups",
+      "source": "skills.sh",
+      "installs": 149500
+    },
+    {
+      "id": "shadcn/ui",
+      "name": "shadcn/ui",
+      "description": "Beautiful and accessible component library patterns",
+      "source": "skills.sh",
+      "installs": 129800
+    },
+    {
+      "id": "mattpocock/skills/grill-me",
+      "name": "Grill Me",
+      "description": "Deep critical thinking and idea validation",
+      "source": "skills.sh",
+      "installs": 99500
+    },
+    {
+      "id": "obra/superpowers",
+      "name": "Superpowers",
+      "description": "Full business + product workflow (PRD, planning, execution)",
+      "source": "skills.sh",
+      "installs": 142900
+    },
+    {
+      "id": "coreyhaines31/marketingskills/seo-audit",
+      "name": "SEO Audit",
+      "description": "Technical and content SEO analysis",
+      "source": "skills.sh",
+      "installs": 101100
+    },
+    {
+      "id": "inference-skills/skills/ai-video-generation",
+      "name": "AI Video Generation",
+      "description": "Video content creation with AI",
+      "source": "skills.sh",
+      "installs": 166400
+    },
+    {
+      "id": "vercel-labs/agent-skills/vercel-react-native-skills",
+      "name": "React Native",
+      "description": "Mobile app development patterns",
+      "source": "skills.sh",
+      "installs": 110600
+    },
+    {
+      "id": "juliusbrussee/caveman",
+      "name": "Caveman",
+      "description": "Simple, direct, no-nonsense execution",
+      "source": "skills.sh",
+      "installs": 118100
+    },
+
+
+    {
+      "id": "mattpocock/skills/to-prd",
+      "name": "To PRD",
+      "description": "Turn ideas into detailed product requirements",
+      "source": "skills.sh"
+    },
+    {
+      "id": "mattpocock/skills/to-issues",
+      "name": "To Issues",
+      "description": "Break work down into actionable GitHub issues",
+      "source": "skills.sh"
+    },
+    {
+      "id": "coreyhaines31/marketingskills",
+      "name": "Marketing Skills",
+      "description": "Content, growth, and marketing operations",
+      "source": "skills.sh"
+    },
+
+    {
+      "id": "vercel-labs/agent-skills/vercel-nextjs",
+      "name": "Next.js Patterns",
+      "description": "Advanced Next.js architecture",
+      "source": "skills.sh"
+    },
+    {
+      "id": "trailofbits/skills",
+      "name": "Security Audit",
+      "description": "Security best practices and auditing",
+      "source": "skills.sh"
+    },
+
+
+    {
+      "id": "microsoft/azure-skills/azure-cost-optimization",
+      "name": "Azure Cost Optimization",
+      "description": "Cloud cost monitoring and reduction",
+      "source": "skills.sh",
+      "installs": 204600
+    },
+    {
+      "id": "microsoft/azure-skills/azure-kubernetes",
+      "name": "Azure Kubernetes",
+      "description": "Kubernetes operations on Azure",
+      "source": "skills.sh",
+      "installs": 127800
+    },
+    {
+      "id": "microsoft/azure-skills/azure-observability",
+      "name": "Azure Observability",
+      "description": "Monitoring and logging best practices",
+      "source": "skills.sh",
+      "installs": 98100
+    },
+
+   
+    {
+      "id": "microsoft/azure-skills/azure-ai",
+      "name": "Azure AI",
+      "description": "Azure AI services and integration",
+      "source": "skills.sh",
+      "installs": 296600
+    },
+    {
+      "id": "microsoft/azure-skills/azure-deploy",
+      "name": "Azure Deploy",
+      "description": "Cloud deployment pipelines",
+      "source": "skills.sh",
+      "installs": 231000
+    },
+    {
+      "id": "microsoft/azure-skills/azure-cloud-migrate",
+      "name": "Cloud Migration",
+      "description": "Enterprise cloud migration strategies",
+      "source": "skills.sh",
+      "installs": 231000
+    },
+    {
+      "id": "xixu-me/skills/github-actions-docs",
+      "name": "GitHub Actions",
+      "description": "CI/CD workflow expertise",
+      "source": "skills.sh",
+      "installs": 111700
+    },
+    {
+      "id": "roin-orca/skills/simple",
+      "name": "Simple Execution",
+      "description": "Keep solutions simple and effective",
+      "source": "skills.sh",
+      "installs": 115500
+    }
+  ],
+  "source": "bundled_popular_50_2026"
+}
