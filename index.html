@@ -2132,6 +2132,24 @@ const RockoCore = (() => {
     _agents[agent.id]=agent;
     manifest.agents=manifest.agents||[];
     if(!manifest.agents.find(a=>a.id===def.id))manifest.agents.push(def);
+
+    // Register in pipeline if agent has a pipeline_step and isn't already there
+    if(def.pipeline_step){
+      manifest.pipeline=manifest.pipeline||{mode:'sequential',on_block:'halt',on_error:'halt_and_log',execution_order:[]};
+      manifest.pipeline.execution_order=manifest.pipeline.execution_order||[];
+      const alreadyIn=manifest.pipeline.execution_order.find(s=>s.agent_id===def.id||s.step_id===def.pipeline_step);
+      if(!alreadyIn){
+        manifest.pipeline.execution_order.push({
+          step_id:def.pipeline_step,
+          label:def.display_name||def.name,
+          type:'agent',
+          agent_id:def.id,
+          requires_approval:def.role==='ceo',
+          pipeline_order:def.pipeline_order||manifest.pipeline.execution_order.length+1
+        });
+      }
+    }
+
     saveState(); log('success','Agent created: '+agent.name);
     emit('agentCreated',{agent}); return agent;
   }
@@ -2410,9 +2428,30 @@ function renderDashboard(){
 // ─────────────────────────────────────────────────────────
 function renderPipeline(){
   const proj=RockoCore.getActiveProject(),manifest=RockoCore.getProject(proj);
-  const pipeline=RockoCore.getPipeline(proj);
   const runCtx=RockoCore.getRunContext();
   document.getElementById('pipelineProjectLabel').textContent=manifest?.project?.display_name||proj||'—';
+
+  // Build from manifest pipeline steps
+  const manifestSteps=RockoCore.getPipeline(proj);
+
+  // Find agents with a pipeline_step not yet in the manifest pipeline (created before fix)
+  const allAgents=RockoCore.getAgents(proj);
+  const agentsInPipeline=new Set(manifestSteps.map(s=>s.agent_id).filter(Boolean));
+  const orphanSteps=allAgents
+    .filter(a=>a.pipeline_step&&!agentsInPipeline.has(a.id))
+    .map(a=>({
+      step_id:a.pipeline_step,
+      label:a.display_name||a.name,
+      type:'agent',
+      agent_id:a.id,
+      requires_approval:a.role==='ceo',
+      pipeline_order:a.pipeline_order||999
+    }));
+
+  // Merge and sort so pipeline reflects all live agents
+  const pipeline=[...manifestSteps,...orphanSteps]
+    .sort((a,b)=>(a.pipeline_order||0)-(b.pipeline_order||0));
+
   if(!pipeline.length){document.getElementById('pipelineFlow').innerHTML='<div style="color:var(--text-dim);font-family:var(--mono);font-size:12px;padding:20px">No pipeline defined.</div>';return;}
   const rC=agentId=>{const a=agentId?RockoCore.getAgent(agentId):null;return({ceo:'var(--yellow)',analyst:'var(--accent)',engine:'var(--green)',custom:'var(--purple)'})[a?.role]||'var(--text-dim)';};
   const sC=s=>({active:'var(--green)',idle:'var(--text-dim)',paused:'var(--yellow)',error:'var(--red)',complete:'var(--green)',skipped:'var(--yellow)',running:'var(--yellow)',pending_approval:'var(--yellow)',rejected:'var(--red)',blocked:'var(--red)'})[s]||'var(--text-dim)';
