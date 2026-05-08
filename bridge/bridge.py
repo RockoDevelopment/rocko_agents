@@ -3,14 +3,6 @@ RockoAgents Executor Bridge v5.0
 Integrates: scheduler, task worker, CEO orchestrator, model manager.
 Run: python bridge.py --port 8787
 """
-# ====================== WINDOWS PACKAGED EXE SSL FIX ======================
-import ssl
-try:
-    ssl._create_default_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
-# ========================================================================
-
 import urllib.request
 import argparse, json, os, subprocess, sys, threading, time, traceback, uuid, webbrowser
 from datetime import datetime
@@ -132,6 +124,14 @@ class ApprovalRequest(BaseModel):
 class OrchestrateRequest(BaseModel):
     pipeline_context: Dict[str, Any] = {}
     step_id:          Optional[str] = None
+
+class RoutingPlanRequest(BaseModel):
+    reason:         str = ""
+    apply:          bool = True
+    allow_fallback: bool = False
+
+class RoutingValidateRequest(BaseModel):
+    routing: Dict[str, Any] = {}
 
 class RuntimeRunRequest(BaseModel):
     context:   Dict[str, Any] = {}
@@ -297,7 +297,7 @@ def run_executor_sync(eid: str, context: Dict, env_overrides: Dict = {}, dry_run
 
 # -- Subsystem init ------------------------------------------------------------
 def _init_subsystems():
-    global _model_mgr, _task_worker, _scheduler, _orchestrator, _runtime_mgr, _exec_engine
+    global _model_mgr, _task_worker, _scheduler, _orchestrator
     from bridge import model_manager as mm
     env = build_env()
     mm.init(PROJECT, env)
@@ -359,7 +359,6 @@ def _init_subsystems():
     # Re-init task worker with runtime support
     _task_worker._runtime_fn = lambda rid, ctx, aid: _runtime_mgr.execute(rid, ctx, aid)
 
-    _ensure_skills_bootstrap()
     _load_pipeline_runs()
     _auto_migrate_paperteam()
     _log("info", "All subsystems initialised")
@@ -671,6 +670,357 @@ def run_schedule_now(schedule_id: str):
     if not _scheduler.run_now(schedule_id): raise HTTPException(404, "Schedule not found")
     return {"status": "fired", "schedule_id": schedule_id}
 
+
+# -- CEO-managed internal routing ---------------------------------------------
+def _project_file() -> Optional[Path]:
+    if not PROJECT_ROOT:
+        return None
+    return Path(PROJECT_ROOT) / "project.json"
+
+def _save_project(reason: str = "") -> bool:
+    """Persist the in-memory project manifest after safe bridge-managed edits."""
+    fp = _project_file()
+    if not fp:
+        return False
+    try:
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(PROJECT, f, indent=2)
+        if reason:
+            _log("info", f"Project saved: {reason}")
+        return True
+    except Exception as e:
+        _log("warn", f"Could not save project.json: {e}")
+        return False
+
+def _find_ceo_agent() -> Optional[Dict[str, Any]]:
+    agents = PROJECT.get("agents", []) if PROJECT else []
+    for a in agents:
+        role = str(a.get("role", "")).lower()
+        if role == "ceo" or a.get("id") == "ceo_agent":
+            return a
+    for a in agents:
+        hay = f"{a.get('id','')} {a.get('name','')} {a.get('display_name','')}".lower()
+        if "ceo" in hay:
+            return a
+    return agents[0] if agents else None
+
+def _agent_registry() -> List[Dict[str, Any]]:
+    """
+    Real agent registry exposed to the CEO routing planner.
+    This is the source of truth; the CEO must choose from these IDs only.
+    """
+    registry: List[Dict[str, Any]] = []
+    for a in PROJECT.get("agents", []) if PROJECT else []:
+        skills = []
+        for s in a.get("skills", []) or []:
+            if isinstance(s, str):
+                skills.append({"id": s, "name": s})
+            elif isinstance(s, dict):
+                skills.append({
+                    "id": s.get("id", s.get("skill_id", s.get("name", ""))),
+                    "name": s.get("name", s.get("skill_name", s.get("id", ""))),
+                })
+        registry.append({
+            "id": a.get("id", ""),
+            "name": a.get("name") or a.get("display_name") or a.get("id", ""),
+            "role": a.get("role", "analyst"),
+            "status": a.get("status", "active"),
+            "enabled": bool(a.get("enabled", True)),
+            "description": a.get("description", ""),
+            "skills": skills,
+            "outputs_to": list(a.get("outputs_to", []) or []),
+        })
+    return registry
+
+def _current_routing_graph() -> Dict[str, Any]:
+    edges = []
+    for a in PROJECT.get("agents", []) if PROJECT else []:
+        src = a.get("id", "")
+        for dst in a.get("outputs_to", []) or []:
+            edges.append({"from": src, "to": dst})
+    routing = PROJECT.get("routing", {}) if PROJECT else {}
+    return {
+        "mode": routing.get("mode", "ceo_managed"),
+        "dirty": routing.get("dirty", False),
+        "last_updated_at": routing.get("last_updated_at"),
+        "last_updated_by": routing.get("last_updated_by"),
+        "summary": routing.get("summary", ""),
+        "edges": edges,
+    }
+
+def _normalise_routing_edges(payload: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Accept CEO routing in common shapes and normalize to [{from,to,reason}]."""
+    if not isinstance(payload, dict):
+        return []
+    routing = payload.get("routing", payload)
+    raw_edges = routing.get("edges") or routing.get("links") or []
+    edges: List[Dict[str, str]] = []
+    if isinstance(raw_edges, dict):
+        for src, targets in raw_edges.items():
+            if isinstance(targets, str):
+                targets = [targets]
+            for dst in targets or []:
+                edges.append({"from": str(src), "to": str(dst), "reason": ""})
+    elif isinstance(raw_edges, list):
+        for e in raw_edges:
+            if not isinstance(e, dict):
+                continue
+            src = e.get("from") or e.get("source") or e.get("source_agent_id") or e.get("agent_id")
+            dst = e.get("to") or e.get("target") or e.get("target_agent_id") or e.get("outputs_to")
+            reason = e.get("reason", "")
+            if isinstance(dst, list):
+                for d in dst:
+                    edges.append({"from": str(src or ""), "to": str(d), "reason": str(reason)})
+            else:
+                edges.append({"from": str(src or ""), "to": str(dst or ""), "reason": str(reason)})
+    outputs_to = routing.get("outputs_to")
+    if isinstance(outputs_to, dict):
+        for src, targets in outputs_to.items():
+            if isinstance(targets, str):
+                targets = [targets]
+            for dst in targets or []:
+                edges.append({"from": str(src), "to": str(dst), "reason": ""})
+    clean = []
+    seen = set()
+    for e in edges:
+        src = e.get("from", "").strip()
+        dst = e.get("to", "").strip()
+        if not src or not dst:
+            continue
+        key = (src, dst)
+        if key in seen:
+            continue
+        seen.add(key)
+        clean.append({"from": src, "to": dst, "reason": e.get("reason", "")})
+    return clean
+
+def _validate_routing_edges(edges: List[Dict[str, str]]) -> Dict[str, Any]:
+    registry = _agent_registry()
+    agent_ids = {a["id"] for a in registry if a.get("id")}
+    active_ids = {a["id"] for a in registry if a.get("id") and a.get("enabled") and a.get("status") != "fired"}
+    errors: List[str] = []
+    warns: List[str] = []
+    adjacency: Dict[str, List[str]] = {aid: [] for aid in agent_ids}
+    incoming: Dict[str, int] = {aid: 0 for aid in agent_ids}
+
+    for e in edges:
+        src = e.get("from", "")
+        dst = e.get("to", "")
+        if src not in agent_ids:
+            errors.append(f"Unknown source agent id: {src}")
+            continue
+        if dst not in agent_ids:
+            errors.append(f"Unknown target agent id: {dst}")
+            continue
+        if src == dst:
+            errors.append(f"Self-loop is not allowed: {src} -> {dst}")
+            continue
+        adjacency.setdefault(src, []).append(dst)
+        incoming[dst] = incoming.get(dst, 0) + 1
+
+    visiting, visited, cycle_hits = set(), set(), []
+    def dfs(node: str, stack: List[str]):
+        if node in visiting:
+            cycle_hits.append(" -> ".join(stack + [node]))
+            return
+        if node in visited:
+            return
+        visiting.add(node)
+        for nxt in adjacency.get(node, []):
+            dfs(nxt, stack + [node])
+        visiting.remove(node)
+        visited.add(node)
+
+    for aid in agent_ids:
+        dfs(aid, [])
+    for c in cycle_hits:
+        errors.append(f"Cycle detected: {c}")
+
+    if active_ids:
+        routed_ids = {e.get("from") for e in edges} | {e.get("to") for e in edges}
+        isolated = sorted(active_ids - routed_ids)
+        if isolated:
+            warns.append("Active agents not connected in routing graph: " + ", ".join(isolated))
+        start_nodes = sorted([aid for aid in active_ids if incoming.get(aid, 0) == 0 and adjacency.get(aid)])
+        if not start_nodes and edges:
+            warns.append("No clear start node detected")
+        ceo = _find_ceo_agent()
+        if ceo and ceo.get("id") in active_ids:
+            ceo_id = ceo.get("id")
+            if edges and incoming.get(ceo_id, 0) == 0 and adjacency.get(ceo_id):
+                warns.append("CEO has outbound routing but no upstream inputs; confirm this is intentional")
+
+    return {
+        "ok": len(errors) == 0,
+        "errors": errors,
+        "warns": warns,
+        "agent_count": len(agent_ids),
+        "edge_count": len(edges),
+        "edges": edges,
+    }
+
+def _apply_routing_edges(edges: List[Dict[str, str]], summary: str = "", updated_by: str = "ceo") -> Dict[str, Any]:
+    validation = _validate_routing_edges(edges)
+    if not validation.get("ok"):
+        return {"ok": False, "validation": validation}
+    outputs: Dict[str, List[str]] = {}
+    for e in edges:
+        outputs.setdefault(e["from"], []).append(e["to"])
+    for a in PROJECT.get("agents", []) if PROJECT else []:
+        aid = a.get("id")
+        a["outputs_to"] = outputs.get(aid, [])
+    PROJECT["routing"] = {
+        "mode": "ceo_managed",
+        "dirty": False,
+        "last_updated_at": datetime.now().isoformat(),
+        "last_updated_by": updated_by,
+        "summary": summary,
+        "validation": validation,
+    }
+    _save_project("ceo routing graph updated")
+    return {"ok": True, "routing": _current_routing_graph(), "validation": validation}
+
+def _mark_routing_dirty(reason: str):
+    if not PROJECT:
+        return
+    routing = PROJECT.setdefault("routing", {})
+    routing.setdefault("mode", "ceo_managed")
+    routing["dirty"] = True
+    routing["dirty_reason"] = reason
+    routing["dirty_at"] = datetime.now().isoformat()
+    _save_project(f"routing marked dirty: {reason}")
+
+def _extract_json_object(text: str) -> Dict[str, Any]:
+    import re as _re
+    if not text:
+        return {}
+    cleaned = text.strip()
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```", 1)[1].split("```", 1)[0].strip()
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    m = _re.search(r"\{.*\}", text, _re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            return {}
+    return {}
+
+def _ceo_generate_routing(reason: str = "") -> Dict[str, Any]:
+    if not PROJECT:
+        raise HTTPException(503, "No project loaded")
+    if not _model_mgr:
+        raise HTTPException(503, "Model manager not initialised")
+    ceo = _find_ceo_agent()
+    if not ceo:
+        raise HTTPException(400, "No CEO agent available to generate routing")
+
+    registry = _agent_registry()
+    current = _current_routing_graph()
+    system = (
+        "You are the CEO routing architect for this RockoAgents company. "
+        "Your job is to build the internal agent-to-agent DAG from the real agent registry. "
+        "Use only agent IDs that appear in agent_registry. Do not invent IDs. "
+        "Do not create UI instructions. Do not discuss Telegram, WhatsApp, dashboards, or human messaging. "
+        "Return only valid JSON with this shape: "
+        "{\"routing\":{\"edges\":[{\"from\":\"agent_id\",\"to\":\"agent_id\",\"reason\":\"why\"}]},\"summary\":\"short explanation\"}. "
+        "The graph must be acyclic and should route specialist outputs toward review/decision agents, usually ending at the CEO when appropriate."
+    )
+    user_payload = {
+        "company": PROJECT.get("project", {}),
+        "reason": reason or "Build or refresh the company internal routing DAG.",
+        "agent_registry": registry,
+        "current_routing": current,
+    }
+    try:
+        resp = _model_mgr.run_agent_model(
+            ceo,
+            system,
+            [{"role": "user", "content": json.dumps(user_payload, indent=2)}],
+            PROJECT_ROOT,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"CEO routing model call failed: {e}")
+
+    text = ""
+    if isinstance(resp, dict):
+        text = (resp.get("content") or resp.get("text") or resp.get("response") or
+                resp.get("stdout") or resp.get("message") or "")
+        if not text and isinstance(resp.get("output"), dict):
+            text = json.dumps(resp.get("output"))
+    else:
+        text = str(resp)
+    plan = _extract_json_object(text)
+    if not plan:
+        raise HTTPException(500, "CEO did not return a valid routing JSON object")
+    edges = _normalise_routing_edges(plan)
+    validation = _validate_routing_edges(edges)
+    return {
+        "ok": validation.get("ok", False),
+        "plan": plan,
+        "edges": edges,
+        "validation": validation,
+        "raw_response": text,
+    }
+
+def _fallback_routing_edges() -> List[Dict[str, str]]:
+    """Optional safety fallback, only used when explicitly requested."""
+    registry = [a for a in _agent_registry() if a.get("enabled") and a.get("status") != "fired"]
+    ceo = _find_ceo_agent()
+    ceo_id = ceo.get("id") if ceo else ""
+    non_ceo = [a for a in registry if a.get("id") != ceo_id]
+    edges = []
+    if ceo_id:
+        for a in non_ceo:
+            edges.append({"from": a["id"], "to": ceo_id, "reason": "fallback route to CEO"})
+    return edges
+
+@app.get("/routing/graph")
+def routing_graph():
+    if not PROJECT:
+        raise HTTPException(503, "No project loaded")
+    graph = _current_routing_graph()
+    validation = _validate_routing_edges(graph.get("edges", []))
+    return {"registry": _agent_registry(), "routing": graph, "validation": validation}
+
+@app.post("/routing/validate")
+def routing_validate(req: RoutingValidateRequest):
+    edges = _normalise_routing_edges(req.routing or {})
+    return _validate_routing_edges(edges)
+
+@app.post("/routing/ceo/rebuild")
+def routing_ceo_rebuild(req: RoutingPlanRequest):
+    if not PROJECT:
+        raise HTTPException(503, "No project loaded")
+    try:
+        generated = _ceo_generate_routing(req.reason)
+    except HTTPException:
+        if not req.allow_fallback:
+            raise
+        edges = _fallback_routing_edges()
+        generated = {
+            "ok": True,
+            "plan": {"summary": "Fallback routing: all active specialists report to CEO."},
+            "edges": edges,
+            "validation": _validate_routing_edges(edges),
+            "raw_response": "",
+        }
+    if not generated.get("validation", {}).get("ok"):
+        return generated
+    if req.apply:
+        applied = _apply_routing_edges(
+            generated.get("edges", []),
+            summary=(generated.get("plan", {}) or {}).get("summary", "CEO-managed routing updated"),
+            updated_by="ceo",
+        )
+        generated["applied"] = applied
+    return generated
+
 # -- Orchestration routes ------------------------------------------------------
 @app.post("/orchestrate")
 def orchestrate(req: OrchestrateRequest):
@@ -775,6 +1125,37 @@ def model_config():
     safe["providers"] = {k: {kk: vv for kk, vv in v.items() if "key" not in kk.lower()}
                          for k, v in cfg.get("providers", {}).items()}
     return safe
+
+# -- Runtime routes ------------------------------------------------------------
+@app.get("/runtimes")
+def list_runtimes():
+    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
+    return {"runtimes": _runtime_mgr.list_runtimes(), "count": len(_runtime_mgr.list_runtimes())}
+
+@app.get("/runtimes/{runtime_id}")
+def get_runtime(runtime_id: str):
+    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
+    rt = _runtime_mgr.get_runtime(runtime_id)
+    if not rt: raise HTTPException(404, f"Runtime '{runtime_id}' not found")
+    return rt
+
+@app.post("/runtimes/{runtime_id}/test")
+def test_runtime(runtime_id: str):
+    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
+    return _runtime_mgr.execute(runtime_id, {"_test": True}, dry_run=True)
+
+@app.post("/runtimes/{runtime_id}/run")
+def run_runtime(runtime_id: str, req: RuntimeRunRequest):
+    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
+    perm = _runtime_mgr.check_permission(runtime_id, req.agent_id)
+    if not perm["allowed"]:
+        raise HTTPException(403, perm["reason"])
+    if perm.get("requires_approval") and not req.dry_run:
+        return {"ok": False, "requires_approval": True,
+                "message": f"Runtime '{runtime_id}' requires human approval before execution",
+                "runtime_id": runtime_id}
+    return _runtime_mgr.execute(runtime_id, req.context, req.agent_id, req.dry_run)
+
 
 # -- Runtime endpoints ---------------------------------------------------------
 @app.get("/runtimes")
@@ -1304,125 +1685,65 @@ def _parse_skill_md(content: str, owner: str = "", repo: str = "", skill_name: s
         "raw":          content,
     }
 
-
-def _default_skills_library() -> Dict[str, Any]:
-    """Small bundled library used when skills.json/cache/network are unavailable."""
-    return {
-        "version": "1.0",
-        "skills": [
-            {"id": "vercel-labs/skills/find-skills", "name": "Find Skills", "description": "Discover and install useful agent skills", "source": "bundled"},
-            {"id": "anthropics/skills/frontend-design", "name": "Frontend Design", "description": "Modern UI/UX patterns and frontend best practices", "source": "bundled"},
-            {"id": "anthropics/skills/skill-creator", "name": "Skill Creator", "description": "Create and refine custom agent skills", "source": "bundled"},
-            {"id": "obra/superpowers", "name": "Superpowers", "description": "Business, product, planning, and execution workflows", "source": "bundled"},
-            {"id": "mattpocock/skills/to-prd", "name": "To PRD", "description": "Turn product ideas into clear requirements", "source": "bundled"},
-            {"id": "mattpocock/skills/to-issues", "name": "To Issues", "description": "Break plans into actionable engineering issues", "source": "bundled"},
-            {"id": "coreyhaines31/marketingskills/seo-audit", "name": "SEO Audit", "description": "Technical and content SEO analysis", "source": "bundled"},
-            {"id": "vercel-labs/agent-skills/web-design-guidelines", "name": "Web Design Guidelines", "description": "Professional web design systems and standards", "source": "bundled"},
-            {"id": "supabase/agent-skills/supabase-postgres-best-practices", "name": "Supabase Best Practices", "description": "Supabase and Postgres startup patterns", "source": "bundled"},
-            {"id": "xixu-me/skills/github-actions-docs", "name": "GitHub Actions", "description": "CI/CD workflow expertise", "source": "bundled"},
-        ],
-        "source": "bundled_fallback"
-    }
-
-
-def _ensure_skills_bootstrap() -> None:
-    """Create the skills cache folder and a starter skills.json if a project is loaded."""
-    targets = []
-    if PROJECT_ROOT:
-        targets.append(Path(PROJECT_ROOT))
-    targets.append(ROCKO_ROOT)
-
-    for base in targets:
-        try:
-            (base / ".rocko_skills").mkdir(parents=True, exist_ok=True)
-            skills_json = base / "skills.json"
-            if not skills_json.exists():
-                with open(skills_json, "w", encoding="utf-8") as f:
-                    json.dump(_default_skills_library(), f, indent=2)
-                _log("info", f"Created default skills.json at {skills_json}")
-        except Exception as e:
-            _log("warn", f"Could not initialise skills cache at {base}: {e}")
-
 @app.get("/skills")
 def list_skills():
     """
-    Always return skills so the UI never treats an empty list as a bridge failure.
-    Priority: project skills.json -> bundled skills.json -> .rocko_skills -> ~/.clawd/skills -> bundled fallback.
+    Load skills from local sources — fast, no network required.
+    Reads from (in priority order):
+      1. skills.json in project root or bridge root
+      2. .rocko_skills/ directory (skills fetched from skills.sh and saved to disk)
+      3. ~/.clawd/skills/ directory (Clawd-Code installed skills)
     """
+    # Try skills.json first
     search_paths = []
     if PROJECT_ROOT:
         search_paths.append(Path(PROJECT_ROOT) / "skills.json")
     search_paths.append(ROCKO_ROOT / "skills.json")
-
     for sp in search_paths:
         if sp.exists():
             try:
-                with open(sp, encoding="utf-8") as f:
-                    data = json.load(f)
-                skills = data.get("skills", []) if isinstance(data, dict) else []
-                if skills:
-                    _log("info", f"Loaded {len(skills)} skills from {sp}")
+                data = json.load(open(sp))
+                if data.get("skills"):
                     return data
-                _log("warn", f"skills.json exists but contains no skills: {sp}")
-            except Exception as e:
-                _log("warn", f"Failed to load skills.json at {sp}: {e}")
+            except Exception:
+                pass
 
+    # Build from local skill directories
     skills = []
-    seen = set()
+    seen   = set()
 
+    # .rocko_skills/ — skills previously fetched from skills.sh
     rocko_dirs = []
     if PROJECT_ROOT:
         rocko_dirs.append(Path(PROJECT_ROOT) / ".rocko_skills")
     rocko_dirs.append(ROCKO_ROOT / ".rocko_skills")
-
     for rdir in rocko_dirs:
-        try:
-            rdir.mkdir(parents=True, exist_ok=True)
+        if rdir.exists():
             for f in sorted(rdir.glob("*.md")):
-                sid = f.stem.replace("__", "/")
-                if sid in seen:
-                    continue
-                seen.add(sid)
-                name = f.stem.split("__")[-1].replace("-", " ").replace("_", " ").title()
-                skills.append({
-                    "id": sid,
-                    "name": name,
-                    "source": "local_cache",
-                    "description": "Cached SKILL.md file",
-                    "installs": 0,
-                    "source_type": "local",
-                    "cached": True,
-                    "cached_path": str(f),
-                })
-        except Exception as e:
-            _log("warn", f"Local skills cache unavailable at {rdir}: {e}")
+                name = f.stem.split("__")[-1]
+                sid  = f.stem.replace("__", "/")
+                if sid not in seen:
+                    seen.add(sid)
+                    skills.append({"id": sid, "name": name, "source": sid,
+                                   "description": "", "installs": 0,
+                                   "source_type": "local", "cached": True})
 
+    # ~/.clawd/skills/ — Clawd-Code installed skills
     clawd_dir = Path.home() / ".clawd" / "skills"
     if clawd_dir.exists():
-        try:
-            for skill_dir in sorted(clawd_dir.iterdir()):
-                skill_md = skill_dir / "SKILL.md"
-                if skill_md.exists() and skill_dir.name not in seen:
-                    seen.add(skill_dir.name)
-                    skills.append({
-                        "id": skill_dir.name,
-                        "name": skill_dir.name.replace("-", " ").replace("_", " ").title(),
-                        "source": "clawd",
-                        "description": "Installed Clawd-Code skill",
-                        "installs": 0,
-                        "source_type": "local",
-                        "cached": True,
-                        "cached_path": str(skill_md),
-                    })
-        except Exception as e:
-            _log("warn", f"Clawd skills cache unavailable: {e}")
+        for skill_dir in sorted(clawd_dir.iterdir()):
+            skill_md = skill_dir / "SKILL.md"
+            if skill_md.exists() and skill_dir.name not in seen:
+                seen.add(skill_dir.name)
+                skills.append({"id": skill_dir.name, "name": skill_dir.name,
+                                "source": "~/.clawd/skills", "description": "",
+                                "installs": 0, "source_type": "local", "cached": True})
 
     if skills:
-        _log("info", f"Loaded {len(skills)} local cached skill(s)")
-        return {"version": "1.0", "skills": skills, "source": "local_cache"}
+        _log("info", f"Loaded {len(skills)} local skill(s)")
+        return {"version": "1.0", "skills": skills, "source": "local"}
 
-    _log("info", "No skills.json or cache found — using bundled fallback skills")
-    return _default_skills_library()
+    return {"version": "1.0", "skills": []}
 
 def _skillssh_fetch(skill_id: str) -> tuple:
     """
@@ -1510,9 +1831,6 @@ def browse_skills_sh(limit: int = 30, q: str = "", view: str = "all-time"):
             if not s.get("isDuplicate")
         ]
         total = data.get("pagination", {}).get("total", len(skills))
-        if not skills:
-            _log("warn", "skills.sh returned no skills — falling back to local/bundled skills")
-            return list_skills()
         _log("info", f"Fetched {len(skills)} skills from skills.sh")
         return {"skills": skills, "source": "skills.sh", "total": total}
     except urllib.error.HTTPError as e:
@@ -1562,7 +1880,7 @@ def fetch_skill(id: str = "", source: str = "", slug: str = "", repo: str = "", 
                 parsed = _parse_skill_md(gh_content, owner, reponame, skill)
                 return {"ok": True, "skill": parsed}
 
-    raise HTTPException(404, f"Skill not found: {resolved}")
+    raise HTTPException(404, f"Skill not found: {resolved_slug}")
 
 @app.post("/skills/assign")
 async def assign_skill(request: Request):
@@ -1693,13 +2011,7 @@ def _register_agent_in_project(agent_def: dict, file_path: str) -> dict:
     }
     agents.append(new_agent)
     PROJECT["agents"] = agents
-    if PROJECT_ROOT:
-        proj_file = Path(PROJECT_ROOT) / "project.json"
-        try:
-            with open(proj_file, "w", encoding="utf-8") as f:
-                json.dump(PROJECT, f, indent=2)
-        except Exception as e:
-            _log("warn", f"Could not update project.json: {e}")
+    _mark_routing_dirty(f"agent registered: {agent_id}")
     return new_agent
 
 def _assign_skills_to_agent(agent_id: str, skills: list) -> list:
@@ -1801,6 +2113,7 @@ async def assign_agent_skills(agent_id: str, request: Request):
             for s in result:
                 if s.get("id") not in existing_ids: existing.append(s)
             a["skills"] = existing; break
+    _mark_routing_dirty(f"skills assigned to agent: {agent_id}")
     return {"ok": True, "agent_id": agent_id, "skills_assigned": result}
 
 # ── Native Execution Engine endpoints ─────────────────────────────────────────
@@ -1847,7 +2160,6 @@ async def validate_provider_endpoint(provider_id: str, request: Request):
 
 def cli_main(argv=None):
     """Callable entry point - used by PyInstaller exe and rockoagents.cli"""
-    global VERBOSE
     import sys as _s
     if argv is not None:
         _s.argv = argv
@@ -1883,12 +2195,9 @@ def cli_main(argv=None):
         print(f"  Subsystem warning: {e}")
 
     # Run validation silently - results available at /validate endpoint
-    validation_result = {"errors": [], "warns": []}
     if ok:
-        try:
-            validation_result = validate_project()
-        except Exception:
-            validation_result = {"errors": [], "warns": []}
+        try: validate_project()
+        except: pass
     print()
 
     # -- Open app window ----------------------------------------------------
@@ -1947,8 +2256,8 @@ def cli_main(argv=None):
     if args.verbose:
         print(f"|  [verbose] Project root: {PROJECT_ROOT or 'none'}")
         print(f"|  [verbose] Data dir:     {DATA_DIR}")
-        for e in validation_result.get("errors", []): print(f"|  FAIL {e}")
-        for w in validation_result.get("warns",  []): print(f"|  WARN {w}")
+        for e in v.get("errors", []): print(f"|  FAIL {e}")
+        for w in v.get("warns",  []): print(f"|  WARN {w}")
         print("|")
     if not args.no_browser:
         print(f"+  RockoAgents is ready.")
