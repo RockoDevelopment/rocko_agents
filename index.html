@@ -2133,7 +2133,6 @@ const RockoCore = (() => {
     manifest.agents=manifest.agents||[];
     if(!manifest.agents.find(a=>a.id===def.id))manifest.agents.push(def);
 
-    // Register in pipeline if agent has a pipeline_step and isn't already there
     if(def.pipeline_step){
       manifest.pipeline=manifest.pipeline||{mode:'sequential',on_block:'halt',on_error:'halt_and_log',execution_order:[]};
       manifest.pipeline.execution_order=manifest.pipeline.execution_order||[];
@@ -2145,7 +2144,8 @@ const RockoCore = (() => {
           type:'agent',
           agent_id:def.id,
           requires_approval:def.role==='ceo',
-          pipeline_order:def.pipeline_order||manifest.pipeline.execution_order.length+1
+          pipeline_order:def.pipeline_order||manifest.pipeline.execution_order.length+1,
+          outputs_to:def.connections||def.outputs_to||[]
         });
       }
     }
@@ -2431,54 +2431,148 @@ function renderPipeline(){
   const runCtx=RockoCore.getRunContext();
   document.getElementById('pipelineProjectLabel').textContent=manifest?.project?.display_name||proj||'—';
 
-  // Build from manifest pipeline steps
-  const manifestSteps=RockoCore.getPipeline(proj);
-
-  // Find agents with a pipeline_step not yet in the manifest pipeline (created before fix)
+  // Build unified node list from live agents + any manifest executor steps
   const allAgents=RockoCore.getAgents(proj);
-  const agentsInPipeline=new Set(manifestSteps.map(s=>s.agent_id).filter(Boolean));
-  const orphanSteps=allAgents
-    .filter(a=>a.pipeline_step&&!agentsInPipeline.has(a.id))
+  const manifestSteps=RockoCore.getPipeline(proj);
+  const agentIds=new Set(allAgents.map(a=>a.id));
+
+  // Agent nodes — source of truth is live _agents, not manifest
+  const agentNodes=allAgents
+    .filter(a=>a.pipeline_step)
     .map(a=>({
       step_id:a.pipeline_step,
       label:a.display_name||a.name,
       type:'agent',
       agent_id:a.id,
       requires_approval:a.role==='ceo',
-      pipeline_order:a.pipeline_order||999
+      pipeline_order:a.pipeline_order||999,
+      outputs_to:a.connections||a.outputs_to||[]
     }));
 
-  // Merge and sort so pipeline reflects all live agents
-  const pipeline=[...manifestSteps,...orphanSteps]
-    .sort((a,b)=>(a.pipeline_order||0)-(b.pipeline_order||0));
+  // Executor nodes from manifest only (agents don't cover these)
+  const executorNodes=manifestSteps.filter(s=>s.type==='executor');
 
-  if(!pipeline.length){document.getElementById('pipelineFlow').innerHTML='<div style="color:var(--text-dim);font-family:var(--mono);font-size:12px;padding:20px">No pipeline defined.</div>';return;}
-  const rC=agentId=>{const a=agentId?RockoCore.getAgent(agentId):null;return({ceo:'var(--yellow)',analyst:'var(--accent)',engine:'var(--green)',custom:'var(--purple)'})[a?.role]||'var(--text-dim)';};
-  const sC=s=>({active:'var(--green)',idle:'var(--text-dim)',paused:'var(--yellow)',error:'var(--red)',complete:'var(--green)',skipped:'var(--yellow)',running:'var(--yellow)',pending_approval:'var(--yellow)',rejected:'var(--red)',blocked:'var(--red)'})[s]||'var(--text-dim)';
-  document.getElementById('pipelineFlow').innerHTML=pipeline.map((step,i)=>{
+  const allNodes=[...agentNodes,...executorNodes];
+
+  if(!allNodes.length){
+    document.getElementById('pipelineFlow').innerHTML='<div style="color:var(--text-dim);font-family:var(--mono);font-size:12px;padding:20px">No pipeline defined. Create agents with a Pipeline Step ID to populate this view.</div>';
+    return;
+  }
+
+  // ── DAG traversal ────────────────────────────────────────────────────────
+  const nodeMap={};
+  allNodes.forEach(n=>{ nodeMap[n.agent_id||n.step_id]=n; });
+
+  // Count inbound edges per node
+  const inbound={};
+  allNodes.forEach(n=>{ inbound[n.agent_id||n.step_id]=0; });
+  allNodes.forEach(n=>{
+    (n.outputs_to||[]).forEach(targetId=>{
+      if(inbound[targetId]!==undefined) inbound[targetId]++;
+    });
+  });
+
+  const hasEdges=allNodes.some(n=>(n.outputs_to||[]).length>0);
+
+  let levels=[];
+
+  if(hasEdges){
+    // DAG mode — traverse from roots following outputs_to
+    let frontier=allNodes
+      .filter(n=>inbound[n.agent_id||n.step_id]===0)
+      .map(n=>n.agent_id||n.step_id);
+
+    const visited=new Set();
+    while(frontier.length>0){
+      const level=frontier.filter(id=>!visited.has(id));
+      if(!level.length)break;
+      levels.push(level);
+      level.forEach(id=>visited.add(id));
+      const next=[];
+      level.forEach(id=>{
+        const node=nodeMap[id];
+        (node?.outputs_to||[]).forEach(targetId=>{
+          if(!visited.has(targetId)&&nodeMap[targetId]){
+            // Only advance when ALL inputs to this target have been visited
+            const allInputsDone=allNodes
+              .filter(n=>(n.outputs_to||[]).includes(targetId))
+              .every(n=>visited.has(n.agent_id||n.step_id));
+            if(allInputsDone) next.push(targetId);
+          }
+        });
+      });
+      frontier=[...new Set(next)];
+    }
+    // Catch any unconnected nodes
+    allNodes.forEach(n=>{
+      const id=n.agent_id||n.step_id;
+      if(!visited.has(id)) levels.push([id]);
+    });
+  } else {
+    // Linear fallback — sort by pipeline_order
+    levels=allNodes
+      .sort((a,b)=>(a.pipeline_order||0)-(b.pipeline_order||0))
+      .map(n=>[n.agent_id||n.step_id]);
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
+  const rC=agentId=>{
+    const a=agentId?RockoCore.getAgent(agentId):null;
+    return({ceo:'var(--yellow)',analyst:'var(--accent)',engine:'var(--green)',custom:'var(--purple)'})[a?.role]||'var(--text-dim)';
+  };
+  const sC=s=>({active:'var(--green)',idle:'var(--text-dim)',paused:'var(--yellow)',error:'var(--red)',
+    complete:'var(--green)',skipped:'var(--yellow)',running:'var(--yellow)',
+    pending_approval:'var(--yellow)',rejected:'var(--red)',blocked:'var(--red)'})[s]||'var(--text-dim)';
+
+  const renderNode=(nodeId,globalIdx)=>{
+    const step=nodeMap[nodeId]; if(!step)return '';
     const agent=step.agent_id?RockoCore.getAgent(step.agent_id):null;
     const color=rC(step.agent_id);
     const agentSt=agent?.status||'idle';
     const runStep=runCtx?.steps?.[step.step_id];
     const displaySt=runStep?.status||agentSt;
-    const isCeo=agent?.role==='ceo', isExt=step.type==='executor';
+    const isCeo=agent?.role==='ceo';
+    const isExt=step.type==='executor';
     const needsApproval=step.requires_approval;
-    const ex=isExt?(RockoCore.getExecutors(proj)[step.executor_id]||{}):null;
+    const ex=isExt?(RockoCore.getExecutors(proj)[step.executor_id||step.step_id]||{}):null;
     const durBadge=runStep?.duration_ms?'<span class="node-badge badge-in">'+runStep.duration_ms+'ms</span>':'';
     const stBadge=runStep?.status?'<span class="node-badge badge-'+(runStep.status==='complete'?'ok':runStep.status==='error'||runStep.status==='rejected'||runStep.status==='blocked'?'err':'skip')+'">'+runStep.status.toUpperCase()+'</span>':'';
     const typeBadge='<span class="node-badge '+(isExt?'badge-ext':'badge-in')+'">'+(isExt?'EXECUTOR':'AGENT')+'</span>';
     const approvalBadge=needsApproval?'<span class="node-badge" style="color:var(--yellow);border-color:rgba(255,209,102,.3)">⏸ APPROVAL</span>':'';
-    const subtext=isExt?(ex?.script_path||step.executor_id):(agent?.description||'No agent registered');
-    const arrow=i<pipeline.length-1?'<div class="pipeline-arrow"><div class="arrow-head"></div></div>':'';
-    const nodeId=(step.agent_id||'').replace(/'/g,'');
-    const nodeLabel=(step.label||'').replace(/'/g,'');
-    const nodeType=(step.type||'');
-    return '<div class="pipeline-node '+(isCeo?'ceo-node':'')+' fade-in" onclick="pipelineClick(\''+nodeId+'\',\''+nodeLabel+'\',\''+nodeType+'\')">'+'<div class="node-step">'+(i+1)+'</div>'+
-      '<div class="node-icon" style="border-color:'+color+';color:'+color+'">'+(isCeo?'★':isExt?'⚙':'◎')+'</div>'+
-      '<div class="node-info"><div class="node-name" style="color:'+color+'">'+step.label+'</div>'+
-      '<div class="node-desc">'+subtext+'</div><div class="node-badges">'+typeBadge+approvalBadge+stBadge+durBadge+'</div></div>'+
-      '<div class="node-status" style="color:'+sC(displaySt)+'"><div class="agent-status-dot status-'+displaySt+'"></div>'+displaySt.toUpperCase()+'</div></div>'+arrow;
-  }).join('');
+    const subtext=isExt?(ex?.script_path||step.step_id):(agent?.description||'No agent registered');
+    const nId=(step.agent_id||'').replace(/'/g,'');
+    const nLabel=(step.label||'').replace(/'/g,'');
+    const nType=(step.type||'');
+    return '<div class="pipeline-node '+(isCeo?'ceo-node':'')+' fade-in" style="flex:1;min-width:220px;max-width:420px;" onclick="pipelineClick(\''+nId+'\',\''+nLabel+'\',\''+nType+'\')">'
+      +'<div class="node-step">'+globalIdx+'</div>'
+      +'<div class="node-icon" style="border-color:'+color+';color:'+color+'">'+(isCeo?'★':isExt?'⚙':'◎')+'</div>'
+      +'<div class="node-info"><div class="node-name" style="color:'+color+'">'+step.label+'</div>'
+      +'<div class="node-desc">'+subtext+'</div>'
+      +'<div class="node-badges">'+typeBadge+approvalBadge+stBadge+durBadge+'</div></div>'
+      +'<div class="node-status" style="color:'+sC(displaySt)+'"><div class="agent-status-dot status-'+displaySt+'"></div>'+displaySt.toUpperCase()+'</div>'
+      +'</div>';
+  };
+
+  let globalIdx=1;
+  let html='';
+  levels.forEach((level,li)=>{
+    const isMulti=level.length>1;
+    html+='<div style="display:flex;flex-direction:'+(isMulti?'row':'column')+';align-items:center;justify-content:center;gap:12px;width:100%;">';
+    level.forEach(nodeId=>{
+      html+=renderNode(nodeId,globalIdx++);
+    });
+    html+='</div>';
+    if(li<levels.length-1){
+      // Arrow row — one arrow per node in current level pointing down
+      html+='<div style="display:flex;justify-content:center;gap:12px;width:100%;">';
+      level.forEach(()=>{
+        html+='<div class="pipeline-arrow" style="flex:1;min-width:220px;max-width:420px;"><div class="arrow-head"></div></div>';
+      });
+      html+='</div>';
+    }
+  });
+
+  document.getElementById('pipelineFlow').innerHTML=html;
 }
 
 function clearRunPanel(){document.getElementById('runPanelBody').innerHTML='<div class="run-empty">Pipeline running...</div>';document.getElementById('runId').textContent='';}
@@ -2567,17 +2661,35 @@ function openAgent(id){
 }
 function renderConnChips(conns){
   const area=document.getElementById('editorConnections');
-  if (!area) return;
-  area.innerHTML=conns.map(c=>'<div class="conn-chip"><span>'+c+'</span><span class="remove" onclick="removeChip(&apos;"+c+"&apos;)">✕</span></div>').join('')+'<button class="conn-add" onclick="addConn()">+ Add</button>';
+  if(!area)return;
+  const proj=RockoCore.getActiveProject();
+  area.innerHTML=conns.map(c=>{
+    const agent=RockoCore.getAgent(c);
+    const label=agent?agent.name+' <span style="opacity:.5;font-size:10px">('+c+')</span>':c;
+    return '<div class="conn-chip"><span>→ '+label+'</span><span class="remove" onclick="removeChip(&apos;'+c+'&apos;)">✕</span></div>';
+  }).join('')+'<button class="conn-add" onclick="addConn()">+ Add Output</button>';
 }
 function removeChip(n){editorConns=editorConns.filter(c=>c!==n);renderConnChips(editorConns);}
-function addConn(){const n=prompt('Connect to:');if(n&&!editorConns.includes(n)){editorConns.push(n);renderConnChips(editorConns);}}
+function addConn(){
+  const proj=RockoCore.getActiveProject();
+  const agents=RockoCore.getAgents(proj).filter(a=>a.id!==currentAgentId);
+  if(!agents.length){ alert('No other agents in this project to connect to.'); return; }
+  const options=agents.map((a,i)=>(i+1)+'. '+a.name+' ('+a.id+')').join('\n');
+  const input=prompt('Connect output to agent:\n\n'+options+'\n\nEnter agent ID:');
+  const match=agents.find(a=>a.id===input||a.name.toLowerCase()===input?.toLowerCase());
+  const val=match?match.id:input;
+  if(val&&!editorConns.includes(val)){
+    editorConns.push(val);
+    renderConnChips(editorConns);
+  }
+}
 function setEditorStatus(val,btn){editorStatus=val;document.querySelectorAll('.status-btn').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');markUnsaved();}
 function markUnsaved(){document.getElementById('saveHint').textContent='● Unsaved';document.getElementById('saveHint').style.color='var(--yellow)';}
 function saveAgent(){
   if(!currentAgentId)return;
 
   const h=document.getElementById('saveHint');
+  const pipelineStep=document.getElementById('editorStep').value.trim();
 
   RockoCore.updateAgent(currentAgentId,{
     name:document.getElementById('editorName').value,
@@ -2585,31 +2697,32 @@ function saveAgent(){
     model_override:document.getElementById('editorModelOverride').value.trim()||null,
     description:document.getElementById('editorDesc').value,
     instructions:document.getElementById('editorInstructions').value,
-    pipeline_step:document.getElementById('editorStep').value,
+    pipeline_step:pipelineStep,
     status:editorStatus,
     connections:editorConns,
+    outputs_to:editorConns,
     tags:document.getElementById('editorTags').value
       .split(',')
       .map(s=>s.trim())
       .filter(Boolean),
-
     apis:[],
     project_tools:['filesystem','http']
   });
 
-  if(h){
-    h.textContent='✓ Saved';
-    h.style.color='var(--green)';
+  // Sync outputs_to into the manifest pipeline step so DAG renderer stays current
+  const proj=RockoCore.getActiveProject();
+  const manifest=RockoCore.getProject(proj);
+  if(manifest&&manifest.pipeline&&Array.isArray(manifest.pipeline.execution_order)){
+    const step=manifest.pipeline.execution_order.find(s=>s.agent_id===currentAgentId);
+    if(step){
+      step.outputs_to=editorConns;
+      if(pipelineStep) step.step_id=pipelineStep;
+    }
   }
 
+  if(h){ h.textContent='✓ Saved'; h.style.color='var(--green)'; }
   refreshAll();
-
-  setTimeout(()=>{
-    if(h){
-      h.textContent='All saved';
-      h.style.color='';
-    }
-  },2000);
+  setTimeout(()=>{ if(h){ h.textContent='All saved'; h.style.color=''; } },2000);
 }
 function deleteCurrentAgent(){
   const a = RockoCore.getAgent(currentAgentId);
