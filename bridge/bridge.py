@@ -1296,65 +1296,97 @@ def list_skills():
     return {"version": "1.0", "skills": []}
 
 @app.get("/skills/browse")
-def browse_skills_sh(limit: int = 30):
+def browse_skills_sh(limit: int = 30, q: str = ""):
     """
-    Fetch trending skills from skills.sh leaderboard.
-    Parses the live leaderboard so agents always see the latest community skills.
-    Falls back to local skills.json if skills.sh is unreachable.
+    Browse skills from agentskill.sh — the open agent skills registry.
+    Uses the agentskill.sh public JSON API:
+      GET https://agentskill.sh/api/agent/search?q=&limit=N
+    Returns the live skill list so the CEO and users always see current skills.
+    Falls back to local skills.json if the registry is unreachable.
     """
-    import re as _re, urllib.request as _ur
+    import urllib.request as _ur, urllib.parse as _up
+    AGENTSKILL_API = "https://agentskill.sh/api"
     try:
-        req = urllib.request.Request("https://skills.sh/",
-            headers={"User-Agent": "Mozilla/5.0 RockoAgents/5.0",
-                     "Accept": "text/html"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            content = r.read().decode("utf-8", errors="replace")
-        # Parse leaderboard entries: ###skill-name\nowner/repo\nNNNK installs
-        entries = _re.findall(
-            r"###\s+(\S+)\n([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)\n([\d.]+[KM]?)",
-            content)
-        skills = []
-        seen = set()
-        for skill_name, repo, installs in entries:
-            key = f"{repo}/{skill_name}"
-            if key in seen: continue
-            seen.add(key)
-            skills.append({
-                "id":          f"{repo.replace('/','__')}__{skill_name}",
-                "name":        skill_name.replace("-", " ").title(),
-                "skill_name":  skill_name,
-                "repo":        repo,
-                "installs":    installs,
-                "description": f"From {repo} - install with: npx skills add {repo}",
-                "source":      "skills.sh",
-            })
-            if len(skills) >= limit: break
-        _log("info", f"Fetched {len(skills)} skills from skills.sh")
-        return {"skills": skills, "source": "skills.sh", "total": len(skills)}
+        params = _up.urlencode({"q": q, "limit": limit})
+        url = f"{AGENTSKILL_API}/agent/search?{params}"
+        req = _ur.Request(url, headers={
+            "User-Agent": "RockoAgents/5.0",
+            "Accept": "application/json",
+        })
+        with _ur.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8", errors="replace"))
+        results = data.get("results", [])
+        skills = [
+            {
+                "id":                  r.get("slug", ""),
+                "name":                r.get("name", r.get("slug", "")),
+                "skill_name":          r.get("slug", ""),
+                "repo":                r.get("owner", ""),
+                "description":         r.get("description", ""),
+                "installs":            r.get("installCount", 0),
+                "security_score":      r.get("securityScore"),
+                "quality_score":       r.get("contentQualityScore"),
+                "source":              "agentskill.sh",
+            }
+            for r in results
+        ]
+        _log("info", f"Fetched {len(skills)} skills from agentskill.sh")
+        return {"skills": skills, "source": "agentskill.sh", "total": data.get("total", len(skills))}
     except Exception as e:
-        _log("warn", f"skills.sh unreachable: {e} - falling back to local")
+        _log("warn", f"agentskill.sh unreachable: {e} — falling back to local skills.json")
         return list_skills()
 
 @app.get("/skills/fetch")
-def fetch_skill(repo: str, skill: str):
+def fetch_skill(repo: str = "", skill: str = "", slug: str = ""):
     """
-    Fetch a SKILL.md from GitHub and return its parsed content.
-    repo format: owner/repo  (e.g. anthropics/skills)
-    skill: skill directory name (e.g. frontend-design)
-    Tries common paths: {skill}/SKILL.md, skills/{skill}/SKILL.md
+    Fetch a full skill including SKILL.md from agentskill.sh.
+    Priority:
+      1. slug param  →  agentskill.sh /api/agent/skills/<slug>/install
+      2. repo+skill  →  agentskill.sh slug = repo/skill, then GitHub fallback
     """
-    owner, reponame = repo.split("/", 1) if "/" in repo else (repo, repo)
-    paths_to_try = [
-        f"{skill}/SKILL.md",
-        f"skills/{skill}/SKILL.md",
-        f".claude/skills/{skill}/SKILL.md",
-    ]
-    for path in paths_to_try:
-        content = _fetch_github_file(owner, reponame, path)
-        if content:
-            parsed = _parse_skill_md(content, owner, reponame, skill)
-            return {"ok": True, "skill": parsed}
-    raise HTTPException(404, f"SKILL.md not found in {repo} for skill '{skill}'")
+    import urllib.request as _ur, urllib.parse as _up
+    AGENTSKILL_API = "https://agentskill.sh/api"
+
+    # Resolve slug
+    resolved_slug = slug or (f"{repo}/{skill}".strip("/") if repo or skill else "")
+    if not resolved_slug:
+        raise HTTPException(400, "Provide slug or repo+skill")
+
+    # Try agentskill.sh first
+    try:
+        url = f"{AGENTSKILL_API}/agent/skills/{_up.quote(resolved_slug, safe='')}/install"
+        req = _ur.Request(url, headers={"User-Agent": "RockoAgents/5.0", "Accept": "application/json"})
+        with _ur.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8", errors="replace"))
+        skill_md  = data.get("skillMd") or data.get("skill_md") or ""
+        skill_name = data.get("name", resolved_slug.split("/")[-1])
+        owner_name = data.get("owner", repo or "")
+        parsed = {
+            "id":           data.get("slug", resolved_slug),
+            "name":         skill_name,
+            "description":  data.get("description", ""),
+            "repo":         owner_name,
+            "skill_name":   resolved_slug,
+            "source":       "agentskill.sh",
+            "instructions": skill_md,
+            "raw":          skill_md,
+            "security_score":  data.get("securityScore"),
+            "quality_score":   data.get("contentQualityScore"),
+        }
+        return {"ok": True, "skill": parsed}
+    except Exception as e:
+        _log("warn", f"agentskill.sh fetch failed for {resolved_slug}: {e} — trying GitHub fallback")
+
+    # GitHub fallback
+    if repo and skill:
+        owner, reponame = repo.split("/", 1) if "/" in repo else (repo, repo)
+        for path in [f"{skill}/SKILL.md", f"skills/{skill}/SKILL.md", f".claude/skills/{skill}/SKILL.md"]:
+            gh_content = _fetch_github_file(owner, reponame, path)
+            if gh_content:
+                parsed = _parse_skill_md(gh_content, owner, reponame, skill)
+                return {"ok": True, "skill": parsed}
+
+    raise HTTPException(404, f"Skill not found: {resolved_slug}")
 
 @app.post("/skills/assign")
 async def assign_skill(request: Request):

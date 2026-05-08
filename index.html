@@ -5220,26 +5220,7 @@ var _skillsLibrary  = [];
 var _skillsTargetId = null;
 var _skillsSource   = 'local';
 
-async function loadSkillsLibrary(forceRemote) {
-  // Try live skills.sh browse first, fall back to local
-  var d = null;
-  if (forceRemote || !_skillsLibrary.length) {
-    d = await bridgeGet('/skills/browse');
-    if (d && d.skills && d.skills.length) {
-      _skillsLibrary = d.skills;
-      _skillsSource  = d.source || 'skills.sh';
-      RockoCore.log('info', 'Skills library loaded from ' + _skillsSource + ': ' + d.skills.length + ' skill(s)');
-      return;
-    }
-  }
-  // Fallback: local skills.json
-  d = await bridgeGet('/skills');
-  if (d && d.skills) {
-    _skillsLibrary = d.skills;
-    _skillsSource  = 'local';
-    RockoCore.log('info', 'Skills library loaded from local skills.json: ' + d.skills.length + ' skill(s)');
-  }
-}
+
 
 function getAgentSkills(agentId) {
   var agent = RockoCore.getAgent(agentId);
