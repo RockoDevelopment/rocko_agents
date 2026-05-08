@@ -2820,101 +2820,35 @@ function saveAgent(){
   if(!currentAgentId)return;
 
   const h=document.getElementById('saveHint');
-  const existing=RockoCore.getAgent(currentAgentId) || {};
-  const proj=existing.project || RockoCore.getActiveProject();
-  const manifest=RockoCore.getProject(proj);
-
-  const name=document.getElementById('editorName').value;
-  const role=document.getElementById('editorRole').value;
-  const modelOverride=document.getElementById('editorModelOverride').value.trim()||null;
-  const description=document.getElementById('editorDesc').value;
-  const instructions=document.getElementById('editorInstructions').value;
   const pipelineStep=document.getElementById('editorStep').value.trim();
-  const scriptPath=document.getElementById('editorScriptPath').value.trim();
-  const entryPoint=document.getElementById('editorEntryPoint').value.trim();
 
-  const currentLocal=existing.local_code || {};
-  const localCode=scriptPath ? {
-    ...currentLocal,
-    type: currentLocal.type || 'python_module',
-    script_path: scriptPath,
-    entry: entryPoint || currentLocal.entry || currentLocal.entry_point || '',
-    entry_point: entryPoint || currentLocal.entry_point || currentLocal.entry || '',
-    working_dir: currentLocal.working_dir || '',
-    env_file: currentLocal.env_file || '.env',
-    run_mode: currentLocal.run_mode || 'subprocess'
-  } : null;
-
-  const updatedAgent={
-    name,
-    display_name:name,
-    role,
-    model_override:modelOverride,
-    description,
-    instructions,
-    _instructions:instructions,
+  RockoCore.updateAgent(currentAgentId,{
+    name:document.getElementById('editorName').value,
+    role:document.getElementById('editorRole').value,
+    model_override:document.getElementById('editorModelOverride').value.trim()||null,
+    description:document.getElementById('editorDesc').value,
+    instructions:document.getElementById('editorInstructions').value,
     pipeline_step:pipelineStep,
     status:editorStatus,
     connections:editorConns,
     outputs_to:editorConns,
-    local_code:localCode,
-    local_script_path:scriptPath,
-    instruction_file:existing.instruction_file || ('agents\\'+currentAgentId+'\\AGENT.md'),
     // skills are assigned through the Skills delegation panel or CEO delegation
-    skills:(existing.skills || []),
-    tags:(existing.tags || []),
-    apis:existing.apis || [],
-    project_tools:existing.project_tools || ['filesystem','http']
-  };
+    skills:(RockoCore.getAgent(currentAgentId).skills || []),
+    tags:(RockoCore.getAgent(currentAgentId).tags || []),
+    apis:[],
+    project_tools:['filesystem','http']
+  });
 
-  RockoCore.updateAgent(currentAgentId,updatedAgent);
-
-  // Persist editor changes into the project manifest too. This prevents a refresh,
-  // company sync, or returning to the agent from restoring stale instructions,
-  // instruction_file, local script path, or entry point from the old manifest copy.
-  if(manifest){
-    manifest.agents=manifest.agents||[];
-    let def=manifest.agents.find(a=>a&&a.id===currentAgentId);
-    if(!def){
-      def={id:currentAgentId};
-      manifest.agents.push(def);
+  // Sync outputs_to into the manifest pipeline step so DAG renderer stays current
+  const proj=RockoCore.getActiveProject();
+  const manifest=RockoCore.getProject(proj);
+  if(manifest&&manifest.pipeline&&Array.isArray(manifest.pipeline.execution_order)){
+    const step=manifest.pipeline.execution_order.find(s=>s.agent_id===currentAgentId);
+    if(step){
+      step.outputs_to=editorConns;
+      if(pipelineStep) step.step_id=pipelineStep;
     }
-    def.name=name;
-    def.display_name=name;
-    def.role=role;
-    def.description=description;
-    def.model_override=modelOverride;
-    def.pipeline_step=pipelineStep;
-    def.status=editorStatus;
-    def.enabled=existing.enabled!==false;
-    def.type=existing.type || def.type || 'prompt';
-    def.instruction_file=updatedAgent.instruction_file;
-    def._instructions=instructions;
-    def.local_code=localCode;
-    def.outputs_to=editorConns;
-    def.connections=editorConns;
-    def.skills=existing.skills || def.skills || [];
-    def.tags=existing.tags || def.tags || [];
-    def.apis=existing.apis || def.apis || [];
-    def.project_tools=existing.project_tools || def.project_tools || ['filesystem','http'];
-
-    manifest.pipeline=manifest.pipeline||{mode:'sequential',on_block:'halt',on_error:'halt_and_log',execution_order:[]};
-    manifest.pipeline.execution_order=manifest.pipeline.execution_order||[];
-    let step=manifest.pipeline.execution_order.find(s=>s.agent_id===currentAgentId);
-    if(!step){
-      step={step_id:pipelineStep||currentAgentId+'_step',label:name,type:'agent',agent_id:currentAgentId};
-      manifest.pipeline.execution_order.push(step);
-    }
-    step.label=name;
-    step.step_id=pipelineStep||step.step_id||currentAgentId+'_step';
-    step.agent_id=currentAgentId;
-    step.type='agent';
-    step.outputs_to=editorConns;
-    step.requires_approval=role==='ceo' || step.requires_approval===true;
   }
-
-  if(typeof syncCompanyAgentCache==='function' && proj){ syncCompanyAgentCache(proj); }
-  if(typeof RockoCore.saveState==='function'){ RockoCore.saveState(); }
 
   if(h){ h.textContent='✓ Saved'; h.style.color='var(--green)'; }
   refreshAll();
@@ -5812,17 +5746,6 @@ openAgent = function(id) {
 async function bootCompanyLayer() {
   loadSkillsLibrary();
 
-  // Make the company picker reliable after login.
-  // Older builds stored companies in localStorage/PGlite first, while newer builds
-  // also scope them to the signed-in bridge account. Restore local durable state
-  // before deciding the user has no companies.
-  try {
-    if (typeof bootPGlite === 'function') await bootPGlite();
-    if (typeof _pgRestoreState === 'function') await _pgRestoreState();
-  } catch(e) {
-    console.warn('Company restore before picker failed:', e);
-  }
-
   // ── Primary: load companies from bridge (source of truth, tied to account) ─
   var bridgeCompanies = null;
   try {
@@ -5830,53 +5753,48 @@ async function bootCompanyLayer() {
     if (resp && resp.companies && resp.companies.length > 0) {
       bridgeCompanies = resp.companies;
     }
-  } catch(e) { /* bridge offline — fall through to local/PGlite cache */ }
+  } catch(e) { /* bridge offline — fall through to localStorage */ }
 
   if (bridgeCompanies) {
-    // Merge browser-only fields and cached manifests from local/PGlite.
+    // Merge logos from localStorage (stored browser-side only)
+    var localList = getCompanies();
+    bridgeCompanies = bridgeCompanies.map(function(co) {
+      var local = localList.find(function(l){ return l.id === co.id; });
+      if (local && local.logo) co.logo = local.logo;
+      return co;
+    });
+    // Cache to localStorage (without _manifest)
     var localList = getCompanies();
     var merged = bridgeCompanies.map(function(c) {
-      var local = localList.find(function(l){ return l.id === c.id; });
-      var copy = Object.assign({}, c);
-      if (local) {
-        if (local._manifest)        copy._manifest        = local._manifest;
-        if (local.default_provider) copy.default_provider = local.default_provider;
-        if (local.default_model)    copy.default_model    = local.default_model;
-        if (local.base_url)         copy.base_url         = local.base_url;
-        if (local.logo)             copy.logo             = local.logo;
-        if (local.agents)           copy.agents           = local.agents;
-      }
-      return copy;
+        var local = localList.find(function(l){ return l.id === c.id; });
+        var copy = Object.assign({}, c);
+        if (local) {
+            if (local._manifest)        copy._manifest        = local._manifest;
+            if (local.default_provider) copy.default_provider = local.default_provider;
+            if (local.default_model)    copy.default_model    = local.default_model;
+            if (local.base_url)         copy.base_url         = local.base_url;
+            if (local.logo)             copy.logo             = local.logo;
+        }
+        return copy;
     });
-    saveCompanies(merged);
+    try { localStorage.setItem(COMPANIES_KEY, JSON.stringify(merged.map(function(c){ var x = Object.assign({},c); delete x._manifest; return x; }))); } catch(e) {}
+    _companiesCache = merged;
+    // Always show onboarding — returning users see picker, new users see create form
     renderCompanyRail();
-    showOnboardingPicker();
+    showOnboarding();
     return;
   }
 
-  // ── Fallback: no account-scoped bridge companies yet — use local/PGlite cache ─
+  // ── Fallback: bridge offline — use localStorage cache ─────────────────────
   var companies = getCompanies();
   if (companies.length > 0) {
-    // Backfill bridge account registry so next login sees the Welcome Back picker.
-    companies.forEach(function(co) {
-      bridgePost('/companies', {
-        id: co.id,
-        display_name: co.display_name || co.id,
-        description: co.description || '',
-        logo_path: co.logo_path || '',
-        project_path: co.project_path || (co._manifest && co._manifest.project && co._manifest.project.root_path) || '',
-        active: !!co.active
-      }).catch(function(){});
-    });
     renderCompanyRail();
-    showOnboardingPicker();
+    showOnboarding();
     return;
   }
 
   // ── No companies anywhere — show create form ──────────────────────────────
-  showOnboardingCreate();
-  var overlay = document.getElementById('onboardingOverlay');
-  if (overlay) overlay.classList.add('show');
+  showOnboarding();
 }
 
 
