@@ -40,8 +40,6 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 # ── Clawd-Code path registration ─────────────────────────────────────────────
 # Resolve the Clawd-Code repo relative to this file's location.
 # Supports both sibling-directory layout and explicit CLAWD_CODE_PATH env var.
-# Clawd-Code is cloned into bridge/Clawd-Code via:
-#   git clone https://github.com/GPT-AGI/Clawd-Code.git bridge/Clawd-Code
 _CLAWD_PATH = os.environ.get("CLAWD_CODE_PATH") or str(
     Path(__file__).parent / "Clawd-Code"
 )
