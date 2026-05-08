@@ -1523,7 +1523,10 @@ def _legacy_data_dirs() -> List[Path]:
     return [p for p in _dedupe_paths(candidates) if p != APP_DATA_DIR]
 
 def _company_recovery_dirs() -> List[Path]:
-    """Known places older builds may have written companies.json."""
+    """
+    Known places older builds may have written companies.json.
+    Includes deep scan of Documents folder so any project name is found.
+    """
     candidates: List[Path] = [
         APP_DATA_DIR,
         DATA_DIR,
@@ -1539,12 +1542,27 @@ def _company_recovery_dirs() -> List[Path]:
             root.parent / "data" / "rockoagents",
         ])
     home = Path.home()
+    # Explicit well-known paths
     candidates.extend([
         home / "Documents" / "RockoAgentHub" / "data" / "rockoagents",
         home / "Documents" / "RockoAgents" / "data" / "rockoagents",
         home / "Documents" / "Companies" / "RockoAgentHub" / "data" / "rockoagents",
         home / "Documents" / "Companies" / "RockoAgents" / "data" / "rockoagents",
     ])
+    # Deep scan: find ANY project folder under Documents that contains
+    # data/rockoagents/companies.json — catches any project name (TheIrisAgency etc.)
+    for scan_root in [home / "Documents", home]:
+        if not scan_root.exists():
+            continue
+        try:
+            for match in scan_root.glob("*/data/rockoagents"):
+                candidates.append(match)
+            for match in scan_root.glob("*/*/data/rockoagents"):
+                candidates.append(match)
+            for match in scan_root.glob("*/*/*/data/rockoagents"):
+                candidates.append(match)
+        except Exception:
+            pass
     return _dedupe_paths(candidates)
 
 def _read_json_dict_file(fp: Path) -> dict:
@@ -1766,6 +1784,32 @@ def _load_companies() -> dict:
         _save_companies(companies)
         _log("info", f"Recovered/merged {recovered} company record(s) into global app registry")
 
+    # Also scan rockoagents_state.json — the frontend syncs its full state here
+    # including companies array from the last browser session
+    for state_dir in [APP_DATA_DIR, DATA_DIR, BRIDGE_DIR / "data" / "rockoagents",
+                      Path.home() / "Documents" / "RockoAgentHub" / "data" / "rockoagents"]:
+        state_file = state_dir / "rockoagents_state.json"
+        if not state_file.exists():
+            continue
+        try:
+            state_data = json.load(open(state_file, encoding="utf-8"))
+            # frontend saves companies as nested data object
+            raw_cos = (state_data.get("data", {}) or {}).get("companies", None)
+            if raw_cos is None:
+                raw_cos = state_data.get("companies", None)
+            if raw_cos:
+                parsed = _normalise_companies_payload(raw_cos)
+                state_added = 0
+                for cid, co in parsed.items():
+                    if isinstance(co, dict) and cid not in companies:
+                        companies[cid] = co
+                        state_added += 1
+                if state_added:
+                    _save_companies(companies)
+                    _log("info", f"Recovered {state_added} company record(s) from frontend state file")
+        except Exception as e:
+            _log("warn", f"Could not parse state file {state_file}: {e}")
+
     return companies
 
 def _save_companies(data: dict):
@@ -1789,17 +1833,28 @@ async def list_companies(request: Request):
             visible = {}
             for k, v in companies.items():
                 owner = v.get("user_id")
-                # Local recovery rule: old/orphaned records may have no owner.
-                # Attach only ownerless local records to the authenticated account.
+                # Adopt ownerless companies
                 if not owner:
                     v["user_id"] = user["id"]
                     owner = user["id"]
                     repaired = True
                 if owner == user["id"]:
                     visible[k] = v
+
+            # Zero-company fallback: if strict filtering hides everything,
+            # the user's previous companies were saved under a different
+            # session user_id (cleared localStorage, new account etc).
+            # Adopt ALL recovered companies and reassign to current user.
+            if not visible and companies:
+                _log("info", f"No companies matched user {user['id']} — adopting all {len(companies)} recovered record(s)")
+                for k, v in companies.items():
+                    v["user_id"] = user["id"]
+                    visible[k] = v
+                repaired = True
+
             if repaired:
                 _save_companies(companies)
-                _log("info", f"Repaired recovered company ownership for user {user['id']}")
+                _log("info", f"Repaired company ownership for user {user['id']}")
             companies = visible
     return {"companies": list(companies.values())}
 
