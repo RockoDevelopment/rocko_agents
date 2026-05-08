@@ -871,7 +871,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
   <button class="nav-tab" onclick="setTab('history',this)">Run History</button>
   <button class="nav-tab" onclick="setTab('runtimes',this)">Runtimes</button>
   <button class="nav-tab" onclick="setTab('automation',this)">Automation</button>
-  <button class="nav-tab" onclick="setTab('skills',this)">Skills</button>
+  <button class="nav-tab" onclick="setTab('runtimes',this)">Runtimes</button>
   <button class="nav-tab" onclick="setTab('orchestration',this)">Orchestration</button>
   <button class="nav-tab" onclick="setTab('settings',this)">Settings</button>
 </div>
@@ -961,37 +961,10 @@ body { display:flex; flex-direction:row; overflow:hidden; }
             <div class="field-group"><div class="field-label">Local Script Path</div><input class="field-input" id="editorScriptPath" placeholder="core/agents/my_agent/run.py" /></div>
             <div class="field-group"><div class="field-label">Entry Point</div><input class="field-input" id="editorEntryPoint" placeholder="run_agent" /></div>
           </div>
-          <div class="field-group">
-            <div class="field-label">Connections</div>
-            <div id="agentConnectionsPanel" style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
-              <div id="telegramConnRow" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;">
-                <div style="display:flex;align-items:center;gap:8px;">
-                  <span style="font-size:14px;">✈</span>
-                  <div>
-                    <div style="font-size:12px;font-weight:600;">Telegram</div>
-                    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);" id="telegramStatus">Not connected</div>
-                  </div>
-                </div>
-                <button class="btn btn-ghost" style="font-size:10px;padding:3px 10px;" id="telegramConnBtn" onclick="toggleTelegramConnection()">Connect</button>
-              </div>
-              <div id="whatsappConnRow" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;">
-                <div style="display:flex;align-items:center;gap:8px;">
-                  <span style="font-size:14px;">💬</span>
-                  <div>
-                    <div style="font-size:12px;font-weight:600;">WhatsApp</div>
-                    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);" id="whatsappStatus">Not connected</div>
-                  </div>
-                </div>
-                <button class="btn btn-ghost" style="font-size:10px;padding:3px 10px;" id="whatsappConnBtn" onclick="toggleWhatsappConnection()">Connect</button>
-              </div>
-            </div>
+          <div class="field-group"><div class="field-label">Connections</div>
+            <div class="connections-area"><div class="conn-chips" id="editorConnections"><button class="conn-add" onclick="addConn()">+ Add</button></div></div>
           </div>
-          <div class="field-group">
-            <div class="field-label">Skills</div>
-            <div id="agentSkillsDisplay" style="display:flex;flex-wrap:wrap;gap:6px;min-height:28px;padding:6px 0;">
-              <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">No skills assigned</span>
-            </div>
-          </div>
+          <div class="field-group"><div class="field-label">Tags</div><input class="field-input" id="editorTags" placeholder="comma separated" /></div>
         </div>
         <div class="editor-sidebar">
           <div class="meta-block">
@@ -2464,7 +2437,6 @@ function setTab(view,btn){
   showView(view);
   if(view==='tasks')refreshTasks();
   if(view==='history')renderRunHistory();
-  if(view==='skills'){loadSkillsLibrary().then(renderSkillsTab);}
   if(view==='settings'){renderSettings();refreshSettingsExternalStatus();setTimeout(function(){if(RockoCore.isBridgeOnline())bridgeGet('/validate').then(function(d){if(d&&window._lastValidateResult!==JSON.stringify(d)){window._lastValidateResult=JSON.stringify(d);}});},300);}
 }
 
@@ -2476,6 +2448,7 @@ function renderSidebar(){
   const agents=RockoCore.getAgents(proj).sort((a,b)=>String(a.pipeline_step).localeCompare(String(b.pipeline_step)));
   const rT=r=>r||'—';
   document.getElementById('agentList').innerHTML=`
+    <div class="project-header"><span>${proj||'—'}</span><span class="proj-badge">${agents.length}</span></div>
     ${agents.map(a=>`
       <div class="agent-item ${currentAgentId===a.id?'active':''}" onclick="openAgent('${a.id}')">
         <div class="agent-status-dot status-${a.status}"></div>
@@ -2764,19 +2737,7 @@ function openAgent(id){
   document.getElementById('editorStep').value=a.pipeline_step||'';
   document.getElementById('editorScriptPath').value=a.local_code?.script_path||'';
   document.getElementById('editorEntryPoint').value=a.local_code?.entry||a.local_code?.entry_point||'';
-  var agentSkillsEl = document.getElementById('agentSkillsDisplay');
-  if(agentSkillsEl){
-    var assignedSkills = a.skills || [];
-    if(assignedSkills.length){
-      agentSkillsEl.innerHTML = assignedSkills.map(function(s){
-        var name = typeof s === 'string' ? s : (s.name || s.skill_name || s.id || String(s));
-        return '<span style="font-family:var(--mono);font-size:10px;padding:3px 8px;background:var(--accent-dim);color:var(--accent);border-radius:3px;border:1px solid rgba(71,130,255,.3);">' + name + '</span>';
-      }).join('');
-    } else {
-      agentSkillsEl.innerHTML = '<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">No skills assigned</span>';
-    }
-  }
-  updateExternalConnectionRows(a);
+  document.getElementById('editorTags').value=(a.tags||[]).join(', ');
   document.getElementById('metaId').textContent=a.id;
   document.getElementById('metaProject').textContent=a.project;
   document.getElementById('metaProvider').textContent=a.provider_key||a.provider||'—';
@@ -2832,9 +2793,10 @@ function saveAgent(){
     status:editorStatus,
     connections:editorConns,
     outputs_to:editorConns,
-    // skills are assigned through the Skills delegation panel or CEO delegation
-    skills:(RockoCore.getAgent(currentAgentId).skills || []),
-    tags:(RockoCore.getAgent(currentAgentId).tags || []),
+    tags:document.getElementById('editorTags').value
+      .split(',')
+      .map(s=>s.trim())
+      .filter(Boolean),
     apis:[],
     project_tools:['filesystem','http']
   });
@@ -5249,78 +5211,6 @@ function autoMigrateExistingProject() {
 }
 
 
-
-function updateExternalConnectionRows(a) {
-  if (!a) return;
-  var isCEO = String(a.role || '').toLowerCase() === 'ceo' || a.id === 'ceo_agent';
-  var tgRow = document.getElementById('telegramConnRow');
-  var tgBtn = document.getElementById('telegramConnBtn');
-  var tgStatus = document.getElementById('telegramStatus');
-  var waRow = document.getElementById('whatsappConnRow');
-  var waBtn = document.getElementById('whatsappConnBtn');
-  var waStatus = document.getElementById('whatsappStatus');
-
-  if (tgRow) {
-    tgRow.style.opacity = isCEO ? '1' : '0.4';
-    tgRow.title = isCEO ? '' : 'Telegram is CEO only';
-  }
-  if (tgBtn) {
-    tgBtn.disabled = !isCEO;
-    tgBtn.textContent = !isCEO ? 'CEO Only' : (a.telegram_connected ? 'Disconnect' : 'Connect');
-  }
-  if (tgStatus) {
-    tgStatus.textContent = !isCEO ? 'CEO only' : (a.telegram_connected ? 'Connected — @' + (a.telegram_handle || 'bot') : 'Not connected');
-  }
-
-  if (waRow) {
-    waRow.style.opacity = isCEO ? '1' : '0.4';
-    waRow.title = isCEO ? '' : 'WhatsApp is CEO only';
-  }
-  if (waBtn) {
-    waBtn.disabled = !isCEO;
-    waBtn.textContent = !isCEO ? 'CEO Only' : (a.whatsapp_connected ? 'Disconnect' : 'Connect');
-  }
-  if (waStatus) {
-    waStatus.textContent = !isCEO ? 'CEO only' : (a.whatsapp_connected ? 'Connected — ' + (a.whatsapp_number || '') : 'Not connected');
-  }
-}
-
-function toggleTelegramConnection() {
-  var a = RockoCore.getAgent(currentAgentId);
-  if (!a) return;
-  var isCEO = String(a.role || '').toLowerCase() === 'ceo' || a.id === 'ceo_agent';
-  if (!isCEO) { toastErr('Telegram is only available on the CEO agent.'); return; }
-  if (a.telegram_connected) {
-    RockoCore.updateAgent(currentAgentId, {telegram_connected:false, telegram_handle:''});
-    updateExternalConnectionRows(RockoCore.getAgent(currentAgentId));
-    toastOk('Telegram disconnected.');
-  } else {
-    var handle = prompt('Enter your Telegram Bot Token:');
-    if (!handle) return;
-    RockoCore.updateAgent(currentAgentId, {telegram_connected:true, telegram_handle:handle});
-    updateExternalConnectionRows(RockoCore.getAgent(currentAgentId));
-    toastOk('Telegram connected.');
-  }
-}
-
-function toggleWhatsappConnection() {
-  var a = RockoCore.getAgent(currentAgentId);
-  if (!a) return;
-  var isCEO = String(a.role || '').toLowerCase() === 'ceo' || a.id === 'ceo_agent';
-  if (!isCEO) { toastErr('WhatsApp is only available on the CEO agent.'); return; }
-  if (a.whatsapp_connected) {
-    RockoCore.updateAgent(currentAgentId, {whatsapp_connected:false, whatsapp_number:''});
-    updateExternalConnectionRows(RockoCore.getAgent(currentAgentId));
-    toastOk('WhatsApp disconnected.');
-  } else {
-    var number = prompt('Enter your WhatsApp number (e.g. +14155552671):');
-    if (!number) return;
-    RockoCore.updateAgent(currentAgentId, {whatsapp_connected:true, whatsapp_number:number});
-    updateExternalConnectionRows(RockoCore.getAgent(currentAgentId));
-    toastOk('WhatsApp connected.');
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════
 // SKILLS SYSTEM — powered by skills.sh (Vercel's open skills directory)
 // CEO agent can browse skills.sh and assign skills to other agents.
@@ -5329,142 +5219,6 @@ function toggleWhatsappConnection() {
 var _skillsLibrary  = [];
 var _skillsTargetId = null;
 var _skillsSource   = 'local';
-var _skillDelegationAgentId = null;
-
-function renderSkillsTab() {
-  var el = document.getElementById('skillsTabList');
-  if (!el) return;
-  var searchEl = document.getElementById('skillsTabSearch');
-  var query = searchEl ? searchEl.value.toLowerCase() : '';
-  var list = _skillsLibrary.filter(function(s) {
-    if (!query) return true;
-    return (s.name||'').toLowerCase().includes(query) ||
-           (s.description||'').toLowerCase().includes(query) ||
-           (s.source||'').toLowerCase().includes(query);
-  });
-  if (!list.length) {
-    el.innerHTML = '<div style="text-align:center;padding:40px;font-family:var(--mono);font-size:12px;color:var(--text-dim);">' +
-      '<div style="font-size:28px;margin-bottom:12px;">📦</div>' +
-      (query ? 'No skills match that search.' : 'No skills loaded yet — bridge must be running.') +
-      '<br><button class="btn btn-ghost" style="margin-top:12px;" onclick="loadSkillsLibrary(true).then(renderSkillsTab)">⟳ Fetch from skills.sh</button>' +
-      '</div>';
-    renderSkillDelegationPanel();
-    return;
-  }
-  var html = '';
-  list.forEach(function(s) {
-    var name     = s.name || s.slug || s.id || '';
-    var source   = s.source || '';
-    var desc     = s.description || '';
-    var installs = s.installs ? (s.installs > 999 ? Math.round(s.installs/1000) + 'K' : s.installs) + ' installs' : '';
-    var skillId  = s.id || name;
-    html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border);gap:12px;">' +
-      '<div style="flex:1;min-width:0;">' +
-        '<div style="font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);">' + name + '</div>' +
-        (source ? '<div style="font-size:10px;color:var(--text-dim);margin-top:2px;">' + source + '</div>' : '') +
-        (desc   ? '<div style="font-size:11px;color:var(--text-secondary);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + desc + '</div>' : '') +
-      '</div>' +
-      '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">' +
-        (installs ? '<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">' + installs + '</span>' : '') +
-        '<button class="btn btn-ghost" style="padding:4px 10px;font-size:10px;" data-skill-id="' + skillId + '" onclick="copySkillId(this)">⎘ Copy ID</button>' +
-      '</div>' +
-    '</div>';
-  });
-  el.innerHTML = html;
-  renderSkillDelegationPanel();
-}
-
-function copySkillId(btn) {
-  var id = btn.getAttribute('data-skill-id');
-  if (!id) return;
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(id).then(function() { toastOk('Copied: ' + id); });
-  } else {
-    toastOk('ID: ' + id);
-  }
-}
-
-function skillPanelEscape(v) {
-  return String(v == null ? '' : v).replace(/[&<>'"]/g, function(c) {
-    return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c];
-  });
-}
-
-function renderSkillDelegationPanel() {
-  var panel = document.getElementById('skillDelegationPanel');
-  if (!panel) return;
-  var proj = RockoCore.getActiveProject();
-  var agents = RockoCore.getAgents(proj) || [];
-  agents = agents.filter(function(a){ return a && a.status !== 'fired' && a.enabled !== false; });
-  if (!_skillDelegationAgentId && agents.length) _skillDelegationAgentId = agents[0].id;
-  if (_skillDelegationAgentId && !agents.find(function(a){ return a.id === _skillDelegationAgentId; })) {
-    _skillDelegationAgentId = agents.length ? agents[0].id : null;
-  }
-  if (!agents.length) {
-    panel.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);padding:20px;text-align:center;">No agents available.</div>';
-    return;
-  }
-  var selected = RockoCore.getAgent(_skillDelegationAgentId) || agents[0];
-  _skillDelegationAgentId = selected.id;
-  var tabs = agents.map(function(a){
-    var active = a.id === _skillDelegationAgentId;
-    return '<button class="btn ' + (active ? 'btn-primary' : 'btn-ghost') + '" style="font-size:10px;padding:5px 9px;max-width:145px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="selectSkillDelegationAgent(&quot;' + skillPanelEscape(a.id) + '&quot;)">' + skillPanelEscape(a.name || a.id) + '</button>';
-  }).join('');
-  var skills = selected.skills || [];
-  var skillsHtml = skills.length ? skills.map(function(s){
-    var id = typeof s === 'string' ? s : (s.id || s.skill_id || s.name || '');
-    var name = typeof s === 'string' ? s : (s.name || s.skill_name || id);
-    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:var(--bg-panel);border:1px solid var(--border);margin-bottom:6px;">' +
-      '<div style="min-width:0;flex:1;">' +
-        '<div style="font-family:var(--mono);font-size:11px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(name) + '</div>' +
-        '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(id) + '</div>' +
-      '</div>' +
-      '<button class="btn btn-danger" style="font-size:9px;padding:4px 8px;" onclick="deleteDelegatedSkill(&quot;' + skillPanelEscape(id) + '&quot;)">Delete</button>' +
-    '</div>';
-  }).join('') : '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);padding:12px;background:var(--bg-panel);border:1px solid var(--border);">No skills assigned to this agent.</div>';
-  panel.innerHTML =
-    '<div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-bottom:10px;">Agent Skill Delegation</div>' +
-    '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">' + tabs + '</div>' +
-    '<div style="background:var(--bg-card);border:1px solid var(--border);padding:12px;margin-bottom:12px;">' +
-      '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:5px;">Selected Agent</div>' +
-      '<div style="font-family:var(--cond);font-size:18px;font-weight:700;color:var(--text-primary);margin-bottom:2px;">' + skillPanelEscape(selected.name || selected.id) + '</div>' +
-      '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">' + skillPanelEscape(selected.id) + '</div>' +
-    '</div>' +
-    '<div style="display:flex;gap:8px;margin-bottom:14px;">' +
-      '<input id="skillDelegationInput" class="field-input" style="height:32px;font-size:11px;font-family:var(--mono);" placeholder="Paste skill ID, e.g. anthropics/skills/frontend-design" />' +
-      '<button class="btn btn-success" style="height:32px;white-space:nowrap;" onclick="addDelegatedSkill()">Add Skill</button>' +
-    '</div>' +
-    '<div style="font-family:var(--mono);font-size:10px;letter-spacing:1px;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px;">Current Skills</div>' +
-    '<div id="skillDelegationOwnedList">' + skillsHtml + '</div>';
-}
-
-function selectSkillDelegationAgent(agentId) {
-  _skillDelegationAgentId = agentId;
-  renderSkillDelegationPanel();
-}
-
-function addDelegatedSkill() {
-  if (!_skillDelegationAgentId) { toastErr('Select an agent first'); return; }
-  var input = document.getElementById('skillDelegationInput');
-  var skillId = input ? input.value.trim() : '';
-  if (!skillId) { toastErr('Enter a skill ID first'); return; }
-  var skillData = _skillsLibrary.find(function(s){ return s.id === skillId || s.slug === skillId; }) || {id:skillId, name:skillId, source:'manual'};
-  _skillsTargetId = _skillDelegationAgentId;
-  applySkillToAgent(skillId, skillData);
-  bridgePost('/skills/assign', {id: skillId, agent_id: _skillDelegationAgentId}).catch(function(){});
-  if (input) input.value = '';
-  renderSkillDelegationPanel();
-  refreshAll();
-}
-
-function deleteDelegatedSkill(skillId) {
-  if (!_skillDelegationAgentId) return;
-  if (!confirm('Delete skill from this agent?\n\n' + skillId)) return;
-  _skillsTargetId = _skillDelegationAgentId;
-  removeSkillFromAgent(skillId);
-  renderSkillDelegationPanel();
-  refreshAll();
-}
 
 async function loadSkillsLibrary(forceRemote) {
   if (!forceRemote && _skillsLibrary.length) return;
@@ -5592,7 +5346,6 @@ function applySkillToAgent(skillId, skillData) {
   toastOk('Skill applied: ' + (skillData.name || skillId));
   renderSkillsLibrary();
   renderAgentAppliedSkills();
-  renderSkillDelegationPanel();
 }
 
 function removeSkillFromAgent(skillId) {
@@ -5611,7 +5364,6 @@ function removeSkillFromAgent(skillId) {
   toastOk('Skill removed');
   renderSkillsLibrary();
   renderAgentAppliedSkills();
-  renderSkillDelegationPanel();
 }
 
 function renderAgentAppliedSkills() {
@@ -6906,25 +6658,22 @@ fullBoot();
 <div class="toast-container" id="toastContainer"></div>
 
 
-    <!-- SKILLS -->
-    <div class="view" id="view-skills">
+    <!-- RUNTIMES -->
+    <div class="view" id="view-runtimes">
       <div class="dash-header">
-        <div class="dash-title">Skills</div>
-        <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
-          <input id="skillsTabSearch" class="field-input" style="width:220px;height:30px;font-size:11px;" placeholder="Search skills..." oninput="renderSkillsTab()" />
-          <button class="btn btn-ghost" onclick="loadSkillsLibrary(true).then(renderSkillsTab)">⟳ Refresh</button>
+        <div class="dash-title">External Runtimes</div>
+        <div style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-ghost" onclick="refreshRuntimes()">⟳ Refresh</button>
+          <button class="btn btn-ghost" onclick="openLogModal()">Logs</button>
         </div>
       </div>
-      <div class="auto-body" style="max-width:none;display:grid;grid-template-columns:minmax(520px, 1fr) 420px;gap:20px;align-items:start;">
-        <div style="min-width:0;">
-          <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);line-height:1.7;background:var(--bg-card);border:1px solid var(--border);padding:12px 16px;margin-bottom:12px;">
-            Skills are reusable capabilities sourced from <span style="color:var(--accent)">skills.sh</span>.
-            Assign a skill to an agent to append its instructions to that agent's system prompt.
-            The CEO can autonomously assign skills during pipeline runs.
-          </div>
-          <div id="skillsTabList"></div>
+      <div class="auto-body">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);line-height:1.7;background:var(--bg-card);border:1px solid var(--border);padding:12px 16px;">
+          Runtimes are external agent systems configured in <span style="color:var(--accent)">project.json → runtimes</span>.
+          Supported types: <span style="color:var(--accent)">cli</span> · <span style="color:var(--accent)">http</span> · <span style="color:var(--accent)">webhook</span> · <span style="color:var(--accent)">mcp</span>.
+          Risk levels: <span style="color:var(--green)">read_only</span> · <span style="color:var(--yellow)">write</span> · <span style="color:var(--red)">deploy</span> · <span style="color:var(--red)">financial</span> (last two require human approval).
         </div>
-        <div id="skillDelegationPanel" style="position:sticky;top:0;background:var(--bg-panel);border:1px solid var(--border-bright);padding:16px;min-height:360px;"></div>
+        <div id="runtimesList"><div class="empty-state">Loading runtimes...</div></div>
       </div>
     </div>
 
