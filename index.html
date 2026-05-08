@@ -4190,6 +4190,7 @@ setInterval(function() {
 // Company = user-facing workspace. Project = technical config.
 // ═══════════════════════════════════════════════════════════════
 var COMPANIES_KEY = 'rockoagents_companies_v1';
+var DELETED_COMPANIES_KEY = 'rockoagents_deleted_companies_v1';
 var _currentCompanyLogo = null;
 var _companyModalLogo   = null;
 
@@ -4201,6 +4202,54 @@ function saveCompanies(list) {
   localStorage.setItem(COMPANIES_KEY, JSON.stringify(list));
   bridgePost('/data/save', {key: 'companies', data: list});
 }
+function getDeletedCompanyIds() {
+  try {
+    var raw = localStorage.getItem(DELETED_COMPANIES_KEY) || '[]';
+    var arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch(e) { return []; }
+}
+function saveDeletedCompanyIds(ids) {
+  var seen = {};
+  var clean = (ids || []).filter(function(id){
+    id = String(id || '').trim();
+    if (!id || seen[id]) return false;
+    seen[id] = true;
+    return true;
+  });
+  localStorage.setItem(DELETED_COMPANIES_KEY, JSON.stringify(clean));
+  try { bridgePost('/data/save', {key:'deleted_companies', data:clean}); } catch(e) {}
+}
+function markCompanyDeleted(id) {
+  if (!id) return;
+  var ids = getDeletedCompanyIds();
+  if (ids.indexOf(id) === -1) ids.push(id);
+  saveDeletedCompanyIds(ids);
+}
+function filterDeletedCompanies(list) {
+  var deleted = getDeletedCompanyIds();
+  if (!deleted.length) return list || [];
+  return (list || []).filter(function(c){ return c && deleted.indexOf(c.id) === -1; });
+}
+function getCompanyProjectName(co) {
+  if (!co) return null;
+  return (co._manifest && co._manifest.project && co._manifest.project.name) ||
+         (co.display_name || co.id || '').replace(/\s+/g, '_');
+}
+function getActiveCompanyProjectName() {
+  return getCompanyProjectName(getActiveCompany()) || RockoCore.getActiveProject();
+}
+async function scrubDeletedCompanyEverywhere(id, projectName) {
+  if (!id) return;
+  try { await bridgeDelete('/companies/' + encodeURIComponent(id)); } catch(e) {}
+  try { await bridgePost('/companies/delete', {id:id, project_name:projectName || ''}); } catch(e) {}
+  try { await bridgePost('/data/delete_company', {id:id, project_name:projectName || ''}); } catch(e) {}
+  try { await bridgePost('/data/save', {key:'deleted_companies', data:getDeletedCompanyIds()}); } catch(e) {}
+  try { await bridgePost('/data/save', {key:'companies', data:filterDeletedCompanies(getCompanies())}); } catch(e) {}
+  if (_pgReady && _pgdb) {
+    try { await _pgDeleteCompany(id); } catch(e) {}
+  }
+}
 function getActiveCompany() {
   return getCompanies().find(function(c){ return c.active; }) || null;
 }
@@ -4209,6 +4258,8 @@ function setActiveCompany(id) {
   list.forEach(function(c){ c.active = c.id === id; });
   saveCompanies(list);
   var co = list.find(function(c){ return c.id === id; });
+  _skillDelegationAgentId = null;
+  _skillDelegationCompanyId = co ? (co.id || getCompanyProjectName(co)) : null;
   if (co) _activateCompany(co);
 }
 function _activateCompany(co) {
@@ -4236,6 +4287,8 @@ function _activateCompany(co) {
 
     var activeProjName = manifest.project ? manifest.project.name : co.id;
     RockoCore.setActiveProject(activeProjName);
+    _skillDelegationAgentId = null;
+    _skillDelegationCompanyId = co.id || activeProjName;
     _skillDelegationProjectName = activeProjName;
     _skillDelegationAgentId = null;
 
@@ -5139,13 +5192,13 @@ async function deleteCompany(id) {
   var co = list.find(function(c){ return c.id === id; });
   if (!co) return;
 
-  if (!confirm('Delete "' + (co.display_name || co.id) + '" permanently?\n\nThis removes the company, its cached agents, and its saved project state from RockoAgentHub.')) return;
+  if (!confirm('Delete "' + (co.display_name || co.id) + '" permanently?\n\nThis removes the company everywhere RockoAgents knows about it: UI cache, PGlite, bridge registry, active project state, cached agents, and recovered company lists.')) return;
 
-  var projectName =
-    (co._manifest && co._manifest.project && co._manifest.project.name) ||
-    (co.display_name || co.id || '').replace(/\s+/g, '_');
+  var projectName = getCompanyProjectName(co);
 
-  var newList = list.filter(function(c){ return c.id !== id; });
+  markCompanyDeleted(id);
+
+  var newList = filterDeletedCompanies(list.filter(function(c){ return c.id !== id; }));
   newList.forEach(function(c, i){ c.active = i === 0; });
 
   if (projectName && RockoCore._agents) {
@@ -5160,11 +5213,7 @@ async function deleteCompany(id) {
   }
 
   if (RockoCore.getActiveProject && RockoCore.getActiveProject() === projectName) {
-    var nextProjectName =
-      newList[0] && (
-        (newList[0]._manifest && newList[0]._manifest.project && newList[0]._manifest.project.name) ||
-        (newList[0].display_name || newList[0].id || '').replace(/\s+/g, '_')
-      ) || null;
+    var nextProjectName = getCompanyProjectName(newList[0]);
     if (nextProjectName && RockoCore._projects && RockoCore._projects[nextProjectName]) {
       RockoCore.setActiveProject(nextProjectName);
     } else if (RockoCore._active !== undefined) {
@@ -5172,33 +5221,41 @@ async function deleteCompany(id) {
     }
   }
 
+  _companiesCache = newList;
+  try { localStorage.setItem(COMPANIES_KEY, JSON.stringify(newList.map(function(c){ var x=Object.assign({},c); delete x._manifest; return x; }))); } catch(e) {}
+
   if (_pgReady && _pgdb) {
     try { await _pgDeleteCompany(id); } catch(e) {}
   }
 
-  // Tell the bridge — without this, the company returns from bridge on next login
-  try { await bridgeDelete('/companies/' + id); } catch(e) {}
+  await scrubDeletedCompanyEverywhere(id, projectName);
 
   saveCompanies(newList);
   RockoCore.saveState();
+  try { pgWrite('rockoagents_v4', RockoCore.exportState ? RockoCore.exportState() : localStorage.getItem('rockoagents_v4')); } catch(e) {}
 
   if (newList.length) {
     var next = newList[0];
     if (next._manifest) {
       RockoCore.loadProject(next._manifest);
       RockoCore.setActiveProject(next._manifest.project ? next._manifest.project.name : next.id);
+      _skillDelegationAgentId = null;
+      _skillDelegationCompanyId = next.id || getCompanyProjectName(next);
     }
     updateTopbarCompany(next);
   } else {
-    localStorage.removeItem(COMPANIES_KEY);
+    localStorage.setItem(COMPANIES_KEY, '[]');
     _companiesCache = [];
+    _skillDelegationAgentId = null;
+    _skillDelegationCompanyId = null;
     showOnboarding();
   }
 
   renderCompanyRail();
+  renderSkillDelegationPanel();
   refreshAll();
   closeModal('editCompanyModal');
-  toastOk('Company permanently deleted.');
+  toastOk('Company permanently deleted everywhere.');
 }
 
 // Workspace gating — intercept setTab to require company
@@ -5255,6 +5312,7 @@ var _skillsLibrary  = [];
 var _skillsTargetId = null;
 var _skillsSource   = 'local';
 var _skillDelegationAgentId = null;
+var _skillDelegationCompanyId = null;
 var _skillDelegationProjectName = null;
 
 function renderSkillsTab() {
@@ -5320,13 +5378,18 @@ function skillPanelEscape(v) {
 function renderSkillDelegationPanel() {
   var panel = document.getElementById('skillDelegationPanel');
   if (!panel) return;
-  var proj = RockoCore.getActiveProject();
-  if (_skillDelegationProjectName !== proj) {
-    _skillDelegationProjectName = proj;
+  var activeCompany = getActiveCompany ? getActiveCompany() : null;
+  var companyKey = activeCompany ? (activeCompany.id || getCompanyProjectName(activeCompany)) : 'no_company';
+  if (_skillDelegationCompanyId !== companyKey) {
+    _skillDelegationCompanyId = companyKey;
     _skillDelegationAgentId = null;
   }
+  var proj = getActiveCompanyProjectName();
   var agents = RockoCore.getAgents(proj) || [];
-  agents = agents.filter(function(a){ return a && a.status !== 'fired' && a.enabled !== false; });
+  agents = agents.filter(function(a){ return a && a.project === proj && a.status !== 'fired' && a.enabled !== false; });
+  if (!agents.length && activeCompany && Array.isArray(activeCompany.agents)) {
+    agents = activeCompany.agents.filter(function(a){ return a && a.status !== 'fired' && a.enabled !== false; });
+  }
   if (!_skillDelegationAgentId && agents.length) _skillDelegationAgentId = agents[0].id;
   if (_skillDelegationAgentId && !agents.find(function(a){ return a.id === _skillDelegationAgentId; })) {
     _skillDelegationAgentId = agents.length ? agents[0].id : null;
@@ -5339,34 +5402,34 @@ function renderSkillDelegationPanel() {
   _skillDelegationAgentId = selected.id;
   var tabs = agents.map(function(a){
     var active = a.id === _skillDelegationAgentId;
-    return '<button class="btn ' + (active ? 'btn-primary' : 'btn-ghost') + '" style="height:22px;font-size:9px;padding:2px 7px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1;" onclick="selectSkillDelegationAgent(&quot;' + skillPanelEscape(a.id) + '&quot;)">' + skillPanelEscape(a.name || a.id) + '</button>';
+    return '<button class="btn ' + (active ? 'btn-primary' : 'btn-ghost') + '" style="font-size:8px;line-height:1;padding:3px 5px;max-width:92px;height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + skillPanelEscape(a.name || a.id) + '" onclick="selectSkillDelegationAgent(&quot;' + skillPanelEscape(a.id) + '&quot;)">' + skillPanelEscape(a.name || a.id) + '</button>';
   }).join('');
   var skills = selected.skills || [];
   var skillsHtml = skills.length ? skills.map(function(s){
     var id = typeof s === 'string' ? s : (s.id || s.skill_id || s.name || '');
     var name = typeof s === 'string' ? s : (s.name || s.skill_name || id);
-    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;background:var(--bg-panel);border:1px solid var(--border);margin-bottom:5px;">' +
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 7px;background:var(--bg-panel);border:1px solid var(--border);margin-bottom:5px;">' +
       '<div style="min-width:0;flex:1;">' +
         '<div style="font-family:var(--mono);font-size:10px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(name) + '</div>' +
         '<div style="font-family:var(--mono);font-size:8px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(id) + '</div>' +
       '</div>' +
-      '<button class="btn btn-danger" style="height:22px;font-size:8px;padding:2px 7px;line-height:1;" onclick="deleteDelegatedSkill(&quot;' + skillPanelEscape(id) + '&quot;)">Delete</button>' +
+      '<button class="btn btn-danger" style="font-size:8px;padding:3px 6px;height:20px;" onclick="deleteDelegatedSkill(&quot;' + skillPanelEscape(id) + '&quot;)">Delete</button>' +
     '</div>';
   }).join('') : '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);padding:10px;background:var(--bg-panel);border:1px solid var(--border);">No skills assigned to this agent.</div>';
   panel.innerHTML =
     '<div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px;">Agent Skill Delegation</div>' +
-    '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;max-height:96px;overflow-y:auto;padding-right:3px;">' + tabs + '</div>' +
-    '<div style="background:var(--bg-card);border:1px solid var(--border);padding:8px 10px;margin-bottom:10px;">' +
+    '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:9px;max-height:74px;overflow-y:auto;padding-right:2px;">' + tabs + '</div>' +
+    '<div style="background:var(--bg-card);border:1px solid var(--border);padding:8px;margin-bottom:9px;">' +
       '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:3px;">Selected Agent</div>' +
-      '<div style="font-family:var(--cond);font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(selected.name || selected.id) + '</div>' +
+      '<div style="font-family:var(--cond);font-size:15px;font-weight:700;color:var(--text-primary);margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(selected.name || selected.id) + '</div>' +
       '<div style="font-family:var(--mono);font-size:8px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(selected.id) + '</div>' +
     '</div>' +
-    '<div style="display:flex;gap:6px;margin-bottom:12px;">' +
-      '<input id="skillDelegationInput" class="field-input" style="height:28px;font-size:10px;font-family:var(--mono);padding:5px 8px;" placeholder="Paste skill ID, e.g. anthropics/skills/frontend-design" />' +
-      '<button class="btn btn-success" style="height:28px;font-size:9px;padding:3px 9px;white-space:nowrap;" onclick="addDelegatedSkill()">Add Skill</button>' +
+    '<div style="display:flex;gap:6px;margin-bottom:10px;">' +
+      '<input id="skillDelegationInput" class="field-input" style="height:28px;font-size:10px;font-family:var(--mono);padding:5px 7px;" placeholder="Paste skill ID" />' +
+      '<button class="btn btn-success" style="height:28px;white-space:nowrap;font-size:9px;padding:4px 8px;" onclick="addDelegatedSkill()">Add Skill</button>' +
     '</div>' +
-    '<div style="font-family:var(--mono);font-size:10px;letter-spacing:1px;color:var(--text-dim);text-transform:uppercase;margin-bottom:7px;">Current Skills</div>' +
-    '<div id="skillDelegationOwnedList" style="max-height:180px;overflow-y:auto;padding-right:3px;">' + skillsHtml + '</div>';
+    '<div style="font-family:var(--mono);font-size:9px;letter-spacing:1px;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px;">Current Skills</div>' +
+    '<div id="skillDelegationOwnedList" style="max-height:150px;overflow-y:auto;padding-right:2px;">' + skillsHtml + '</div>';
 }
 
 function selectSkillDelegationAgent(agentId) {
@@ -5499,7 +5562,8 @@ async function applySkillFromModal(skillId, repo, skillName) {
 
 function applySkillToAgent(skillId, skillData) {
   if (!_skillsTargetId) return;
-  var agent = RockoCore.getAgent(_skillsTargetId);
+  var proj = getActiveCompanyProjectName ? getActiveCompanyProjectName() : RockoCore.getActiveProject();
+  var agent = (RockoCore.getAgents(proj) || []).find(function(a){ return a.id === _skillsTargetId; }) || RockoCore.getAgent(_skillsTargetId);
   if (!agent) return;
   var skills = agent.skills ? JSON.parse(JSON.stringify(agent.skills)) : [];
   if (skills.find(function(s){ return (s.id||s) === skillId; })) { toastWarn('Skill already applied'); return; }
@@ -5527,7 +5591,8 @@ function applySkillToAgent(skillId, skillData) {
 
 function removeSkillFromAgent(skillId) {
   if (!_skillsTargetId) return;
-  var agent = RockoCore.getAgent(_skillsTargetId);
+  var proj = getActiveCompanyProjectName ? getActiveCompanyProjectName() : RockoCore.getActiveProject();
+  var agent = (RockoCore.getAgents(proj) || []).find(function(a){ return a.id === _skillsTargetId; }) || RockoCore.getAgent(_skillsTargetId);
   if (!agent) return;
   var skills    = (agent.skills || []).filter(function(s){ return (s.id||s) !== skillId; });
   var baseInstr = agent._base_instructions || agent.instructions || '';
@@ -5685,6 +5750,11 @@ async function bootCompanyLayer() {
   } catch(e) { /* bridge offline — fall through to localStorage */ }
 
   if (bridgeCompanies) {
+    bridgeCompanies = filterDeletedCompanies(bridgeCompanies);
+    getDeletedCompanyIds().forEach(function(deletedId){ scrubDeletedCompanyEverywhere(deletedId); });
+  }
+
+  if (bridgeCompanies && bridgeCompanies.length) {
     // Merge logos from localStorage (stored browser-side only)
     var localList = getCompanies();
     bridgeCompanies = bridgeCompanies.map(function(co) {
@@ -5715,7 +5785,8 @@ async function bootCompanyLayer() {
   }
 
   // ── Fallback: bridge offline — use localStorage cache ─────────────────────
-  var companies = getCompanies();
+  var companies = filterDeletedCompanies(getCompanies());
+  if (companies.length !== getCompanies().length) saveCompanies(companies);
   if (companies.length > 0) {
     renderCompanyRail();
     showOnboarding();
@@ -5988,7 +6059,7 @@ async function _pgMigrateFromLocalStorage() {
   try {
     var raw = localStorage.getItem(COMPANIES_KEY);
     if (raw) {
-      var list = JSON.parse(raw);
+      var list = filterDeletedCompanies(JSON.parse(raw));
       for (var co of list) {
         await _pgSaveCompany(co);
       }
@@ -6049,11 +6120,11 @@ async function _pgLoadCompanies() {
   if (!_pgReady || !_pgdb) return null;
   try {
     var r = await _pgdb.query('SELECT data, active FROM companies ORDER BY active DESC');
-    return r.rows.map(function(row) {
+    return filterDeletedCompanies(r.rows.map(function(row) {
       var co = JSON.parse(row.data);
       co.active = row.active === 1;
       return co;
-    });
+    }));
   } catch { return null; }
 }
 async function _pgDeleteCompany(id) {
@@ -6076,6 +6147,7 @@ getCompanies = function() {
 
 var _origSaveCompanies = saveCompanies;
 saveCompanies = function(list) {
+  list = filterDeletedCompanies(list || []);
   var lean = (list || []).map(function(c){
     var x = Object.assign({}, c);
     delete x._manifest;
@@ -6181,7 +6253,7 @@ function pgWrite(key, value) {
   catch(e) {
     // Quota exceeded — clear old cache and continue
     try {
-      var keep = ['rockoagents_session_v1','rockoagents_active_co'];
+      var keep = ['rockoagents_session_v1','rockoagents_active_co',DELETED_COMPANIES_KEY];
       for (var i = localStorage.length - 1; i >= 0; i--) {
         var k = localStorage.key(i);
         if (k && !keep.includes(k) && k !== key) localStorage.removeItem(k);
@@ -6853,7 +6925,7 @@ fullBoot();
           </div>
           <div id="skillsTabList"></div>
         </div>
-        <div id="skillDelegationPanel" style="width:420px;max-width:420px;min-width:360px;align-self:flex-start;background:var(--bg-panel);border:1px solid var(--border-bright);padding:14px;max-height:calc(100vh - 180px);overflow-y:auto;flex-shrink:0;"></div>
+        <div id="skillDelegationPanel" style="width:360px;max-width:360px;min-width:320px;align-self:flex-start;background:var(--bg-panel);border:1px solid var(--border-bright);padding:10px;max-height:calc(100vh - 180px);overflow-y:auto;flex-shrink:0;"></div>
       </div>
     </div>
 
