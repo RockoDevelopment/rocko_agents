@@ -41,13 +41,15 @@ _port = 8787  # updated in cli_main
 # -- Core state ----------------------------------------------------------------
 PROJECT:        Dict = {}
 PROJECT_ROOT:   str  = ""
-DATA_DIR:       Path = ROCKO_ROOT / "data" / "rockoagents"
-RUN_LOG:        Dict[str, Any] = {}
-PIPELINE_RUNS:  List[Dict] = []
+APP_DATA_DIR:       Path = ROCKO_ROOT / "data" / "rockoagents"
+PROJECT_DATA_DIR:   Path = APP_DATA_DIR
+DATA_DIR:           Path = PROJECT_DATA_DIR  # legacy alias for project-scoped runtime data
+RUN_LOG:            Dict[str, Any] = {}
+PIPELINE_RUNS:      List[Dict] = []
 
 def _load_pipeline_runs():
     global PIPELINE_RUNS
-    p = DATA_DIR / "pipeline_runs.json"
+    p = PROJECT_DATA_DIR / "pipeline_runs.json"
     if p.exists():
         try:
             with open(p) as f: PIPELINE_RUNS = json.load(f)
@@ -140,14 +142,16 @@ class RuntimeRunRequest(BaseModel):
 
 # -- Project loading -----------------------------------------------------------
 def load_project(path: str) -> bool:
-    global PROJECT, PROJECT_ROOT, DATA_DIR
+    global PROJECT, PROJECT_ROOT, PROJECT_DATA_DIR, DATA_DIR
     try:
         p = Path(path).resolve()
         if not p.exists(): _log("error", f"project.json not found: {p}"); return False
         with open(p) as f: PROJECT = json.load(f)
         PROJECT_ROOT = str(Path(PROJECT["project"]["root_path"]).resolve())
-        DATA_DIR     = Path(PROJECT_ROOT) / "data" / "rockoagents"
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        PROJECT_DATA_DIR = Path(PROJECT_ROOT) / "data" / "rockoagents"
+        PROJECT_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        DATA_DIR = PROJECT_DATA_DIR  # keep legacy project-runtime callers working
+        APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
         _log("info", f"Project loaded: {PROJECT['project']['name']}")
         return True
     except Exception as e:
@@ -312,7 +316,7 @@ def _init_subsystems():
             return _runtime_mgr.run(runtime_id, context)
         return {"ok": False, "error": "Runtime manager not ready"}
 
-    _task_worker = TaskWorker(DATA_DIR, run_executor_sync, _agent_call, _runtime_call)
+    _task_worker = TaskWorker(PROJECT_DATA_DIR, run_executor_sync, _agent_call, _runtime_call)
     _task_worker.init(PROJECT, lambda msg: _log("info", msg))
     # Recovery: count what was restored from disk
     all_tasks    = _task_worker.get_tasks()
@@ -339,7 +343,7 @@ def _init_subsystems():
         return {"ok": True}
 
     from bridge.scheduler import SchedulerManager
-    _scheduler = SchedulerManager(DATA_DIR, _schedule_fire)
+    _scheduler = SchedulerManager(PROJECT_DATA_DIR, _schedule_fire)
     _scheduler.init(lambda msg: _log("info", msg))
     _scheduler.start()
     _log("info", f"Schedule recovery: {len(_scheduler.list_schedules())} schedule(s) reloaded from disk")
@@ -505,7 +509,7 @@ def _save_pipeline_run(state: Dict):
     PIPELINE_RUNS.insert(0, {**state})
     if len(PIPELINE_RUNS) > 100: PIPELINE_RUNS.pop()
     try:
-        with open(DATA_DIR / "pipeline_runs.json", "w") as f:
+        with open(PROJECT_DATA_DIR / "pipeline_runs.json", "w") as f:
             json.dump(PIPELINE_RUNS[:100], f, indent=2)
     except Exception: pass
 
@@ -521,7 +525,7 @@ def get_logs(limit: int = 100):
 @app.post("/data/save")
 def data_save(req: DataSaveRequest):
     try:
-        fp = DATA_DIR / (req.key.replace("/", "_") + ".json")
+        fp = PROJECT_DATA_DIR / (req.key.replace("/", "_") + ".json")
         with open(fp, "w") as f: json.dump(req.data, f, indent=2)
         return {"ok": True, "path": str(fp)}
     except Exception as e: raise HTTPException(500, str(e))
@@ -529,7 +533,7 @@ def data_save(req: DataSaveRequest):
 @app.get("/data/load")
 def data_load(key: str):
     try:
-        fp = DATA_DIR / (key.replace("/", "_") + ".json")
+        fp = PROJECT_DATA_DIR / (key.replace("/", "_") + ".json")
         if not fp.exists(): raise HTTPException(404, f"Key not found: {key}")
         with open(fp) as f: data = json.load(f)
         return {"ok": True, "key": key, "data": data}
@@ -1479,33 +1483,57 @@ async def system_test():
 import hashlib, hmac
 
 def _users_file() -> Path:
-    return DATA_DIR / "users.json"
+    return APP_DATA_DIR / "users.json"
 
 def _sessions_file() -> Path:
-    return DATA_DIR / "sessions.json"
+    return APP_DATA_DIR / "sessions.json"
+
+def _legacy_data_dirs() -> List[Path]:
+    """Old builds reused DATA_DIR for both app accounts and project runtime state."""
+    candidates: List[Path] = []
+    for d in (DATA_DIR, PROJECT_DATA_DIR):
+        try:
+            if d and d != APP_DATA_DIR and d not in candidates:
+                candidates.append(d)
+        except Exception:
+            pass
+    return candidates
+
+def _read_json_dict_file(fp: Path) -> dict:
+    if fp.exists():
+        try:
+            data = json.load(open(fp, encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
 def _load_users() -> dict:
-    f = _users_file()
-    if f.exists():
-        try:
-            with open(f) as fp: return json.load(fp)
-        except: pass
-    return {}
+    users = _read_json_dict_file(_users_file())
+    # Backward compatibility: recover users accidentally written to project-scoped DATA_DIR.
+    for d in _legacy_data_dirs():
+        for uid, user in _read_json_dict_file(d / "users.json").items():
+            users.setdefault(uid, user)
+    if users and not _users_file().exists():
+        _save_users(users)
+    return users
 
 def _save_users(data: dict):
     _users_file().parent.mkdir(parents=True, exist_ok=True)
-    with open(_users_file(), 'w') as fp: json.dump(data, fp, indent=2)
+    with open(_users_file(), 'w', encoding="utf-8") as fp: json.dump(data, fp, indent=2)
 
 def _load_sessions() -> dict:
-    f = _sessions_file()
-    if f.exists():
-        try:
-            with open(f) as fp: return json.load(fp)
-        except: pass
-    return {}
+    sessions = _read_json_dict_file(_sessions_file())
+    # Backward compatibility: recover sessions accidentally written to project-scoped DATA_DIR.
+    for d in _legacy_data_dirs():
+        sessions.update(_read_json_dict_file(d / "sessions.json"))
+    if sessions and not _sessions_file().exists():
+        _save_sessions(sessions)
+    return sessions
 
 def _save_sessions(data: dict):
-    with open(_sessions_file(), 'w') as fp: json.dump(data, fp, indent=2)
+    _sessions_file().parent.mkdir(parents=True, exist_ok=True)
+    with open(_sessions_file(), 'w', encoding="utf-8") as fp: json.dump(data, fp, indent=2)
 
 def _hash_password(password: str, salt: str = None) -> tuple:
     if not salt:
@@ -1643,23 +1671,49 @@ async def auth_import(request: Request):
 
 # -- Company registry ----------------------------------------------------------
 def _companies_file() -> Path:
-    return DATA_DIR / "companies.json"
+    return APP_DATA_DIR / "companies.json"
+
+def _normalise_companies_payload(data: Any) -> dict:
+    if isinstance(data, list):
+        return {co["id"]: co for co in data if isinstance(co, dict) and "id" in co}
+    if isinstance(data, dict):
+        if "companies" in data and isinstance(data.get("companies"), list):
+            return {co["id"]: co for co in data["companies"] if isinstance(co, dict) and "id" in co}
+        return data
+    return {}
+
+def _read_companies_file(fp: Path) -> dict:
+    if not fp.exists():
+        return {}
+    try:
+        return _normalise_companies_payload(json.load(open(fp, encoding="utf-8")))
+    except Exception as e:
+        _log("warn", f"Could not read companies file {fp}: {e}")
+        return {}
 
 def _load_companies() -> dict:
-    f = _companies_file()
-    if f.exists():
-        try:
-            data = json.load(open(f))
-            if isinstance(data, list):
-                return {co["id"]: co for co in data if isinstance(co, dict) and "id" in co}
-            if isinstance(data, dict):
-                return data
-        except Exception: pass
-    return {}
+    companies = _read_companies_file(_companies_file())
+
+    # Backward compatibility: previous bridge builds sometimes read/wrote companies
+    # from project-scoped DATA_DIR. Merge those back into the global app registry
+    # so login always shows the Welcome Back company picker.
+    recovered = False
+    for d in _legacy_data_dirs():
+        legacy = _read_companies_file(d / "companies.json")
+        for cid, co in legacy.items():
+            if cid not in companies:
+                companies[cid] = co
+                recovered = True
+
+    if recovered:
+        _save_companies(companies)
+        _log("info", f"Recovered {len(companies)} company record(s) into global app registry")
+
+    return companies
 
 def _save_companies(data: dict):
     _companies_file().parent.mkdir(parents=True, exist_ok=True)
-    with open(_companies_file(), 'w') as fp:
+    with open(_companies_file(), 'w', encoding="utf-8") as fp:
         json.dump(data, fp, indent=2)
 
 def _auto_migrate_paperteam():
@@ -2358,7 +2412,8 @@ def cli_main(argv=None):
     print("|")
     if args.verbose:
         print(f"|  [verbose] Project root: {PROJECT_ROOT or 'none'}")
-        print(f"|  [verbose] Data dir:     {DATA_DIR}")
+        print(f"|  [verbose] App data dir: {APP_DATA_DIR}")
+        print(f"|  [verbose] Project data: {PROJECT_DATA_DIR}")
         for e in v.get("errors", []): print(f"|  FAIL {e}")
         for w in v.get("warns",  []): print(f"|  WARN {w}")
         print("|")
