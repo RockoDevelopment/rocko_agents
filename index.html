@@ -1438,21 +1438,10 @@ body { display:flex; flex-direction:row; overflow:hidden; }
   <div class="modal">
     <div class="modal-header">New Agent <button class="modal-close" onclick="closeModal('newAgentModal')">✕</button></div>
     <div class="modal-body">
-      <div class="field-group"><div class="field-label">Agent Name *</div><input class="field-input" id="newAgentName" placeholder="e.g. Sentiment Analyst" /></div>
-      <div class="field-group"><div class="field-label">Role</div>
-        <select class="field-select" id="newAgentRole">
-          <option value="analyst" selected>Analyst</option><option value="ceo">CEO</option>
-          <option value="engine">Engine</option><option value="custom">Custom</option>
-        </select>
-      </div>
+      <div class="field-group"><div class="field-label">Agent Name *</div><input class="field-input" id="newAgentName" placeholder="e.g. Product Scout" /></div>
+      <div class="field-group"><div class="field-label">Role</div><input class="field-input" id="newAgentRole" placeholder="e.g. Product Research Agent" /></div>
       <div class="field-group"><div class="field-label">Description</div><input class="field-input" id="newAgentDesc" placeholder="What does this agent do?" /></div>
-      <div class="field-group"><div class="field-label">Pipeline Step ID</div><input class="field-input" id="newAgentStep" placeholder="e.g. sentiment_scan" /></div>
-      <div class="field-group"><div class="field-label">Template</div>
-        <select class="field-select" id="newAgentTemplate">
-          <option value="">— blank —</option><option value="analyst">Analyst</option>
-          <option value="engine">Engine</option><option value="ceo">CEO</option>
-        </select>
-      </div>
+      <div class="field-group"><div class="field-label">Pipeline Step ID</div><input class="field-input" id="newAgentStep" placeholder="e.g. product_scout_step" /></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('newAgentModal')">Cancel</button>
@@ -2825,16 +2814,58 @@ async function runAgentCard(id){
     runAgentNow();
   },100);
 }
-function openNewAgentModal(){['newAgentName','newAgentDesc','newAgentStep'].forEach(id=>document.getElementById(id).value='');document.getElementById('newAgentRole').value='analyst';document.getElementById('newAgentTemplate').value='';openModal('newAgentModal');}
+function openNewAgentModal(){
+  ['newAgentName','newAgentRole','newAgentDesc','newAgentStep'].forEach(function(id){
+    var el = document.getElementById(id);
+    if(el) el.value = '';
+  });
+  openModal('newAgentModal');
+}
 function createNewAgent(){
-  const name=document.getElementById('newAgentName').value.trim();if(!name){alert('Name required');return;}
-  const proj=RockoCore.getActiveProject(),tpl=document.getElementById('newAgentTemplate').value;
-  const def={id:'agent_'+Date.now(),name,role:document.getElementById('newAgentRole').value,type:'prompt',
-    instruction_file:'agents\\'+name.toLowerCase().replace(/[^a-z0-9]/g,'_')+'\\AGENT.md',
-    pipeline_step:document.getElementById('newAgentStep').value||name.toLowerCase().replace(/[^a-z0-9]/g,'_')+'_step',
-    status:'idle',description:document.getElementById('newAgentDesc').value,project_tools:[],apis:[],created:new Date().toISOString().split('T')[0]};
-  RockoCore.createAgent(proj,def,AGENT_TEMPLATES[tpl]||'# '+name+'\n\n## Role\n\n## Inputs\n\n## Outputs\n\n## Behavior');
+  const name = document.getElementById('newAgentName').value.trim();
+  if(!name){
+    alert('Name required');
+    return;
+  }
+
+  const roleInput = document.getElementById('newAgentRole');
+  const descInput = document.getElementById('newAgentDesc');
+  const stepInput = document.getElementById('newAgentStep');
+
+  const role = roleInput && roleInput.value.trim()
+    ? roleInput.value.trim()
+    : 'Agent';
+
+  const desc = descInput ? descInput.value.trim() : '';
+  const slug = name.toLowerCase().replace(/[^a-z0-9]/g,'_').replace(/^_+|_+$/g,'') || 'agent';
+  const proj = RockoCore.getActiveProject();
+
+  const def = {
+    id:'agent_' + Date.now(),
+    name:name,
+    display_name:name,
+    role:role,
+    type:'prompt',
+    instruction_file:'agents\\' + slug + '\\AGENT.md',
+    pipeline_step:(stepInput && stepInput.value.trim()) ? stepInput.value.trim() : slug + '_step',
+    status:'idle',
+    description:desc,
+    project_tools:[],
+    apis:[],
+    created:new Date().toISOString().split('T')[0]
+  };
+
+  const instructions =
+    '# ' + name + '\n\n' +
+    '## Role\n' + role + '\n\n' +
+    '## Inputs\n\n' +
+    '## Outputs\n\n' +
+    '## Behavior\n\n' +
+    '## Integration';
+
+  RockoCore.createAgent(proj,def,instructions);
   closeModal('newAgentModal');
+  refreshAll();
 }
 
 // ─────────────────────────────────────────────────────────
