@@ -1022,49 +1022,152 @@ def routing_ceo_rebuild(req: RoutingPlanRequest):
     return generated
 
 # -- Orchestration routes ------------------------------------------------------
+def _load_skill_registry_for_ceo(limit: int = 200) -> List[Dict[str, Any]]:
+    """Load project-root skills.json first so every CEO sees the local skill library."""
+    try:
+        resp = list_skills()
+        skills = resp.get("skills", []) if isinstance(resp, dict) else []
+    except Exception as e:
+        _log("warn", f"CEO skill registry load failed: {e}")
+        skills = []
+
+    registry: List[Dict[str, Any]] = []
+    seen = set()
+    for s in skills:
+        if not isinstance(s, dict):
+            continue
+        sid = str(s.get("id") or s.get("skill_id") or s.get("slug") or s.get("name") or "").strip()
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        registry.append({
+            "id": sid,
+            "name": s.get("name") or sid.split("/")[-1],
+            "description": s.get("description", ""),
+            "source": s.get("source", "skills.json"),
+            "installs": s.get("installs", 0),
+            "cached": s.get("cached", False),
+        })
+        if len(registry) >= limit:
+            break
+    return registry
+
+def _agent_skill_assignments_for_ceo() -> Dict[str, List[Dict[str, Any]]]:
+    assignments: Dict[str, List[Dict[str, Any]]] = {}
+    for a in PROJECT.get("agents", []) if PROJECT else []:
+        aid = a.get("id", "")
+        assignments[aid] = []
+        for s in a.get("skills", []) or []:
+            if isinstance(s, str):
+                assignments[aid].append({"id": s, "name": s, "assigned_by": "unknown"})
+            elif isinstance(s, dict):
+                assignments[aid].append({
+                    "id": s.get("id") or s.get("skill_id") or s.get("name", ""),
+                    "name": s.get("name") or s.get("skill_name") or s.get("id", ""),
+                    "assigned_by": s.get("assigned_by", s.get("source", "unknown")),
+                })
+    return assignments
+
+def _build_ceo_orchestration_context(base_context: Dict[str, Any]) -> Dict[str, Any]:
+    context = dict(base_context or {})
+    context["agent_registry"] = _agent_registry()
+    context["available_skills"] = _load_skill_registry_for_ceo()
+    context["agent_skill_assignments"] = _agent_skill_assignments_for_ceo()
+    context["skill_delegation_authority"] = {
+        "enabled": True,
+        "instruction": (
+            "You may delegate skills to agents by returning decision='assign_skill' "
+            "with skill_id from available_skills and target_agent_id from agent_registry. "
+            "Do not invent skill IDs or agent IDs."
+        ),
+    }
+    return context
+
+def _resolve_skill_for_ceo_assignment(skill_id: str, available_skills: List[Dict[str, Any]]) -> Dict[str, Any]:
+    for s in available_skills:
+        if str(s.get("id", "")).strip() == skill_id:
+            return dict(s)
+    return {"id": skill_id, "name": skill_id.split("/")[-1], "description": "", "source": "ceo"}
+
+def _apply_ceo_skill_assignment(skill_id: str, agent_id: str, available_skills: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not PROJECT:
+        raise ValueError("No project loaded")
+    agent = next((a for a in PROJECT.get("agents", []) if a.get("id") == agent_id), None)
+    if not agent:
+        raise ValueError(f"Unknown target agent id: {agent_id}")
+
+    parsed: Dict[str, Any]
+    try:
+        _, parsed = _skillssh_fetch(skill_id)
+    except Exception as e:
+        local = _resolve_skill_for_ceo_assignment(skill_id, available_skills)
+        parsed = {
+            "id": local.get("id", skill_id),
+            "name": local.get("name") or skill_id.split("/")[-1],
+            "slug": local.get("slug", skill_id.split("/")[-1]),
+            "source": local.get("source", "skills.json"),
+            "description": local.get("description", ""),
+            "cached_path": local.get("cached_path", ""),
+            "instructions": local.get("instructions", ""),
+        }
+        _log("warn", f"Skill fetch skipped/failed for {skill_id}; using local skills.json metadata: {e}")
+
+    existing = agent.setdefault("skills", [])
+    existing_ids = {s if isinstance(s, str) else s.get("id") for s in existing}
+    if parsed["id"] not in existing_ids:
+        existing.append({
+            "id": parsed["id"],
+            "name": parsed.get("name", parsed["id"].split("/")[-1]),
+            "skill_name": parsed.get("slug", parsed["id"].split("/")[-1]),
+            "source": parsed.get("source", "skills.json"),
+            "description": parsed.get("description", ""),
+            "cached_path": parsed.get("cached_path", ""),
+            "instructions": parsed.get("instructions", ""),
+            "assigned_at": datetime.now().isoformat(),
+            "assigned_by": "ceo",
+            "agent_id": agent_id,
+        })
+        _save_project(f"CEO assigned skill {parsed['id']} to {agent_id}")
+    return parsed
+
+def _iter_ceo_skill_decisions(decision: Dict[str, Any]) -> List[Dict[str, Any]]:
+    decisions = []
+    if isinstance(decision, dict):
+        if decision.get("decision") == "assign_skill":
+            decisions.append(decision)
+        for d in decision.get("decisions", []) or []:
+            if isinstance(d, dict) and d.get("decision") == "assign_skill":
+                decisions.append(d)
+    return decisions
+
 @app.post("/orchestrate")
 def orchestrate(req: OrchestrateRequest):
     if not _orchestrator: raise HTTPException(503, "Orchestrator not initialised")
     try:
-        # Inject available skills so CEO knows what it can delegate
-        context = dict(req.pipeline_context)
-        try:
-            skills_resp = browse_skills_sh(limit=50)
-            context["available_skills"] = skills_resp.get("skills", [])
-        except Exception as e:
-            _log("warn", f"Skills injection failed: {e}")
-            context["available_skills"] = []
+        context = _build_ceo_orchestration_context(req.pipeline_context)
+        available_skills = context.get("available_skills", [])
 
         decision = _orchestrator.orchestrate(context)
 
-        # Process CEO skill delegation decisions immediately
         if isinstance(decision, dict):
-            for d in decision.get("decisions", []):
-                if d.get("decision") == "assign_skill":
-                    skill_id = (d.get("skill_id") or d.get("skill") or "").strip()
-                    agent_id = (d.get("target_agent_id") or d.get("agent_id") or "").strip()
-                    if not skill_id:
-                        continue
-                    try:
-                        _, parsed = _skillssh_fetch(skill_id)
-                        if PROJECT and agent_id:
-                            for a in PROJECT.get("agents", []):
-                                if a.get("id") == agent_id:
-                                    existing     = a.setdefault("skills", [])
-                                    existing_ids = {s.get("id") for s in existing}
-                                    if parsed["id"] not in existing_ids:
-                                        existing.append({
-                                            "id":           parsed["id"],
-                                            "name":         parsed["name"],
-                                            "cached_path":  parsed.get("cached_path", ""),
-                                            "instructions": parsed.get("instructions", ""),
-                                            "assigned_at":  datetime.now().isoformat(),
-                                            "assigned_by":  "ceo",
-                                        })
-                                    break
-                        _log("info", f"CEO assigned skill: {skill_id} -> {agent_id}")
-                    except Exception as e:
-                        _log("warn", f"CEO assign_skill failed ({skill_id} -> {agent_id}): {e}")
+            applied_skill_assignments = []
+            for d in _iter_ceo_skill_decisions(decision):
+                skill_id = (
+                    d.get("skill_id")
+                    or d.get("skill")
+                    or (f"{d.get('skill_repo','')}/{d.get('skill_name','')}".strip("/") if d.get("skill_repo") and d.get("skill_name") else "")
+                ).strip()
+                agent_id = (d.get("target_agent_id") or d.get("agent_id") or "").strip()
+                if not skill_id or not agent_id:
+                    continue
+                try:
+                    parsed = _apply_ceo_skill_assignment(skill_id, agent_id, available_skills)
+                    applied_skill_assignments.append({"skill_id": parsed.get("id", skill_id), "agent_id": agent_id})
+                    _log("info", f"CEO assigned skill: {skill_id} -> {agent_id}")
+                except Exception as e:
+                    _log("warn", f"CEO assign_skill failed ({skill_id} -> {agent_id}): {e}")
+            if applied_skill_assignments:
+                decision["_applied_skill_assignments"] = applied_skill_assignments
 
         return decision
     except Exception as e:

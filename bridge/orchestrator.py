@@ -29,7 +29,7 @@ VALID_DECISIONS = {
 # -- CEO system prompt template ------------------------------------------------
 CEO_ORCHESTRATION_PROMPT = """You are the CEO orchestrator of an autonomous agent pipeline.
 
-You receive the full pipeline context - every agent and executor output - and you must decide what to do next.
+You receive the full pipeline context, the real agent registry, the available skills registry loaded from project-root skills.json, and the current agent skill assignments.
 
 You MUST respond with ONLY valid JSON. No markdown, no explanation outside the JSON.
 
@@ -39,7 +39,7 @@ Your response must match this exact schema:
   "decision": "approve | reject | hold | rerun | skip | request_info | create_task | escalate | log_only | change_posture | pause_pipeline | assign_skill | hire_agent | fire_agent",
   "reason": "Clear explanation of your decision",
   "target_step_id": "step id to rerun or skip (optional)",
-  "target_agent_id": "agent id for request_info (optional)",
+  "target_agent_id": "agent id from agent_registry for request_info, assign_skill, or fire_agent (optional)",
   "modified_input": {},
   "created_tasks": [
     {
@@ -52,9 +52,9 @@ Your response must match this exact schema:
   "posture": "AGGRESSIVE | NEUTRAL | DEFENSIVE | null",
   "requires_human_approval": true,
   "allow_execution": false,
-  "skill_repo": "owner/repo (for assign_skill decisions, e.g. anthropics/skills)",
-  "skill_name": "skill-name (for assign_skill decisions, e.g. frontend-design)",
-  "target_agent_id": "agent_id (for assign_skill, fire_agent decisions)",
+  "skill_id": "exact skill id from available_skills for assign_skill decisions",
+  "skill_repo": "legacy owner/repo for assign_skill decisions if skill_id is unavailable",
+  "skill_name": "legacy skill-name for assign_skill decisions if skill_id is unavailable",
   "agent_name": "New Agent Name (for hire_agent decisions - single agent)",
   "agent_role": "analyst|engine|ceo|custom (for hire_agent decisions)",
   "agents": [
@@ -64,15 +64,23 @@ Your response must match this exact schema:
       "agent_id": "snake_case_id",
       "description": "What this agent does",
       "instructions": "Full AGENT.md content for this agent",
-      "skills": [{"repo": "owner/repo", "skill_name": "skill-name"}]
+      "skills": [{"id": "exact skill id from available_skills"}]
     }
   ]
 }
 
+Skill delegation rules:
+- You control skill delegation for the company.
+- If an agent lacks a useful skill and available_skills contains one that fits its role, choose decision "assign_skill".
+- For assign_skill, set target_agent_id to a real ID from agent_registry and skill_id to a real ID from available_skills.
+- Do not invent agent IDs. Do not invent skill IDs.
+- Use agent_skill_assignments to avoid assigning duplicates.
+- Prefer role-fit: scouting/research skills for scout agents, evaluation/analysis skills for evaluator agents, planning/management skills for CEO/manager agents.
+
 When building a team:
 - Use "hire_agent" decision with the "agents" array to create multiple agents at once
 - Write complete AGENT.md instructions for each agent - these become their system prompts
-- Assign skills from skills.sh where relevant to enhance agent capabilities
+- Assign skills from available_skills where relevant to enhance agent capabilities
 - Place agents in logical pipeline order based on their roles
 - Always respect company policy on whether auto-creation is allowed
 
@@ -156,8 +164,26 @@ class CEOOrchestrator:
             if target_agent and target_agent not in agent_ids:
                 raise ValueError(f"request_info target agent '{target_agent}' not in project")
 
-        # Validate created_tasks assignments
+        # Validate skill delegation target and skill id when the bridge injected registries.
         agent_ids = {a["id"] for a in manifest.get("agents", [])}
+        if cmd == "assign_skill":
+            target_agent = decision.get("target_agent_id") or decision.get("agent_id")
+            if not target_agent:
+                raise ValueError("assign_skill requires target_agent_id")
+            if target_agent not in agent_ids:
+                raise ValueError(f"assign_skill target agent '{target_agent}' not in project")
+            skill_id = decision.get("skill_id") or decision.get("skill")
+            if not skill_id and decision.get("skill_repo") and decision.get("skill_name"):
+                skill_id = f"{decision.get('skill_repo')}/{decision.get('skill_name')}".strip("/")
+                decision["skill_id"] = skill_id
+            if not skill_id:
+                raise ValueError("assign_skill requires skill_id")
+            available = pipeline_ctx.get("available_skills") or []
+            available_ids = {str(s.get("id")) for s in available if isinstance(s, dict) and s.get("id")}
+            if available_ids and skill_id not in available_ids:
+                raise ValueError(f"assign_skill skill_id '{skill_id}' is not in available_skills")
+
+        # Validate created_tasks assignments
         for task in decision.get("created_tasks", []):
             if task.get("assigned_to") and task["assigned_to"] not in agent_ids:
                 raise ValueError(f"Created task assigned to unknown agent: '{task['assigned_to']}'")
