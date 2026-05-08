@@ -942,10 +942,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
         <div class="editor-main">
           <div class="row-2">
             <div class="field-group"><div class="field-label">Role</div>
-              <select class="field-select" id="editorRole">
-                <option value="analyst">Analyst</option><option value="ceo">CEO / Orchestrator</option>
-                <option value="engine">Engine / Processor</option><option value="custom">Custom</option>
-              </select>
+              <input class="field-input" id="editorRole" placeholder="e.g. Product Research Agent" />
             </div>
             <div class="field-group"><div class="field-label">Project Default Model</div>
               <input class="field-input" id="editorModel" readonly style="color:var(--text-dim);cursor:not-allowed;" />
@@ -2339,7 +2336,7 @@ function setTab(view,btn){
 function renderSidebar(){
   const proj=RockoCore.getActiveProject();
   const agents=RockoCore.getAgents(proj).sort((a,b)=>String(a.pipeline_step).localeCompare(String(b.pipeline_step)));
-  const rT=r=>({ceo:'CEO',analyst:'ANA',engine:'ENG',custom:'CST'})[r]||'?';
+  const rT=r=>r||'—';
   document.getElementById('agentList').innerHTML=`
     <div class="project-header"><span>${proj||'—'}</span><span class="proj-badge">${agents.length}</span></div>
     ${agents.map(a=>`
@@ -2832,9 +2829,7 @@ function createNewAgent(){
   const descInput = document.getElementById('newAgentDesc');
   const stepInput = document.getElementById('newAgentStep');
 
-  const role = roleInput && roleInput.value.trim()
-    ? roleInput.value.trim()
-    : 'Agent';
+  const role = (roleInput && roleInput.value.trim()) ? roleInput.value.trim() : 'Agent';
 
   const desc = descInput ? descInput.value.trim() : '';
   const slug = name.toLowerCase().replace(/[^a-z0-9]/g,'_').replace(/^_+|_+$/g,'') || 'agent';
