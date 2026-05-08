@@ -31,7 +31,10 @@ else:
     sys.path.insert(0, str(BRIDGE_DIR))
 
 BRIDGE_START    = datetime.now().isoformat()
-SKILLS_SH_API   = "https://skills.sh/api/v1"
+SKILLS_SH_API     = "https://skills.sh/api/v1"
+# Optional: set SKILLS_SH_API_KEY in .env for 600 req/min instead of 60 req/min
+# Keys issued on request at skills.sh — unauthenticated still works at 60 req/min per IP
+SKILLS_SH_API_KEY = os.environ.get("SKILLS_SH_API_KEY", "")
 BRIDGE_BUILD_ID = "bridge_package_import_fix_2026_04_24"
 _port = 8787  # updated in cli_main
 
@@ -1325,7 +1328,14 @@ def _parse_skill_md(content: str, owner: str = "", repo: str = "", skill_name: s
 
 @app.get("/skills")
 def list_skills():
-    """Load skills from local skills.json (custom skills) - fast, no network."""
+    """
+    Load skills from local sources — fast, no network required.
+    Reads from (in priority order):
+      1. skills.json in project root or bridge root
+      2. .rocko_skills/ directory (skills fetched from skills.sh and saved to disk)
+      3. ~/.clawd/skills/ directory (Clawd-Code installed skills)
+    """
+    # Try skills.json first
     search_paths = []
     if PROJECT_ROOT:
         search_paths.append(Path(PROJECT_ROOT) / "skills.json")
@@ -1333,31 +1343,68 @@ def list_skills():
     for sp in search_paths:
         if sp.exists():
             try:
-                with open(sp) as f: return json.load(f)
-            except Exception as e:
-                _log("error", f"Skills load error: {e}")
+                data = json.load(open(sp))
+                if data.get("skills"):
+                    return data
+            except Exception:
+                pass
+
+    # Build from local skill directories
+    skills = []
+    seen   = set()
+
+    # .rocko_skills/ — skills previously fetched from skills.sh
+    rocko_dirs = []
+    if PROJECT_ROOT:
+        rocko_dirs.append(Path(PROJECT_ROOT) / ".rocko_skills")
+    rocko_dirs.append(ROCKO_ROOT / ".rocko_skills")
+    for rdir in rocko_dirs:
+        if rdir.exists():
+            for f in sorted(rdir.glob("*.md")):
+                name = f.stem.split("__")[-1]
+                sid  = f.stem.replace("__", "/")
+                if sid not in seen:
+                    seen.add(sid)
+                    skills.append({"id": sid, "name": name, "source": sid,
+                                   "description": "", "installs": 0,
+                                   "source_type": "local", "cached": True})
+
+    # ~/.clawd/skills/ — Clawd-Code installed skills
+    clawd_dir = Path.home() / ".clawd" / "skills"
+    if clawd_dir.exists():
+        for skill_dir in sorted(clawd_dir.iterdir()):
+            skill_md = skill_dir / "SKILL.md"
+            if skill_md.exists() and skill_dir.name not in seen:
+                seen.add(skill_dir.name)
+                skills.append({"id": skill_dir.name, "name": skill_dir.name,
+                                "source": "~/.clawd/skills", "description": "",
+                                "installs": 0, "source_type": "local", "cached": True})
+
+    if skills:
+        _log("info", f"Loaded {len(skills)} local skill(s)")
+        return {"version": "1.0", "skills": skills, "source": "local"}
+
     return {"version": "1.0", "skills": []}
 
 def _skillssh_fetch(skill_id: str) -> tuple:
     """
-    Core skills.sh fetch helper.
-    Fetches full skill data from https://skills.sh/api/v1/skills/{skill_id}.
-    Returns (skill_md: str, skill_dict: dict) or raises on failure.
-    Saves SKILL.md to .rocko_skills/ for offline use and Clawd alignment.
+    Core skills.sh fetch — GET /api/v1/skills/{id}
+    Returns (skill_md: str, skill_dict: dict).
+    Saves to .rocko_skills/ for offline use and Clawd-Code alignment.
+    Uses SKILLS_SH_API_KEY env var if set (600 req/min vs 60 req/min).
     """
     import urllib.parse as _up
     url = f"{SKILLS_SH_API}/skills/{_up.quote(skill_id, safe='/')}"
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "RockoAgents/5.0",
-        "Accept":     "application/json",
-    })
-    with urllib.request.urlopen(req, timeout=12) as r:
+    headers = {"User-Agent": "RockoAgents/5.0", "Accept": "application/json"}
+    if SKILLS_SH_API_KEY:
+        headers["Authorization"] = f"Bearer {SKILLS_SH_API_KEY}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as r:
         data = json.loads(r.read().decode("utf-8", errors="replace"))
     files    = data.get("files") or []
     skill_md = next((f["contents"] for f in files if f["path"] == "SKILL.md"), "")
     if not skill_md:
         raise ValueError(f"No SKILL.md in skills.sh response for {skill_id}")
-    # Save to .rocko_skills/ so Clawd-Code and _build_effective_instructions can read it
     if PROJECT_ROOT:
         skills_dir = Path(PROJECT_ROOT) / ".rocko_skills"
         skills_dir.mkdir(parents=True, exist_ok=True)
@@ -1385,10 +1432,11 @@ def _skillssh_fetch(skill_id: str) -> tuple:
 @app.get("/skills/browse")
 def browse_skills_sh(limit: int = 30, q: str = "", view: str = "all-time"):
     """
-    Browse/search skills from skills.sh using the official REST API.
-    GET /api/v1/skills          — leaderboard (no query)
-    GET /api/v1/skills/search   — semantic/fuzzy search (with query)
-    Falls back to local skills.json if skills.sh is unreachable.
+    Browse/search skills from skills.sh official REST API.
+    GET /api/v1/skills        — leaderboard browse
+    GET /api/v1/skills/search — semantic/fuzzy search
+    Rate limit: 60 req/min unauthenticated, 600/min with SKILLS_SH_API_KEY in .env
+    Falls back to local skill directories if skills.sh is unreachable.
     """
     import urllib.parse as _up
     try:
@@ -1398,12 +1446,15 @@ def browse_skills_sh(limit: int = 30, q: str = "", view: str = "all-time"):
         else:
             params = _up.urlencode({"view": view, "per_page": min(limit, 500), "page": 0})
             url = f"{SKILLS_SH_API}/skills?{params}"
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "RockoAgents/5.0",
-            "Accept":     "application/json",
-        })
-        with urllib.request.urlopen(req, timeout=10) as r:
+
+        headers = {"User-Agent": "RockoAgents/5.0", "Accept": "application/json"}
+        if SKILLS_SH_API_KEY:
+            headers["Authorization"] = f"Bearer {SKILLS_SH_API_KEY}"
+
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
             data = json.loads(r.read().decode("utf-8", errors="replace"))
+
         raw = data.get("data", [])
         skills = [
             {
@@ -1423,8 +1474,17 @@ def browse_skills_sh(limit: int = 30, q: str = "", view: str = "all-time"):
         total = data.get("pagination", {}).get("total", len(skills))
         _log("info", f"Fetched {len(skills)} skills from skills.sh")
         return {"skills": skills, "source": "skills.sh", "total": total}
+    except urllib.error.HTTPError as e:
+        body = ""
+        try: body = e.read().decode("utf-8", errors="replace")[:300]
+        except: pass
+        _log("warn", f"skills.sh HTTP {e.code}: {body or e.reason} — falling back to local")
+        return list_skills()
+    except urllib.error.URLError as e:
+        _log("warn", f"skills.sh connection error: {e.reason} — falling back to local")
+        return list_skills()
     except Exception as e:
-        _log("warn", f"skills.sh unreachable: {e} — falling back to local skills.json")
+        _log("warn", f"skills.sh error ({type(e).__name__}: {e}) — falling back to local")
         return list_skills()
 
 @app.get("/skills/fetch")
