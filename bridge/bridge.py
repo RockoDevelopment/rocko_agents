@@ -66,7 +66,6 @@ _scheduler    = None
 _orchestrator = None
 _runtime_mgr  = None
 _exec_engine  = None
-_runtime_mgr  = None
 
 # -- App -----------------------------------------------------------------------
 app = FastAPI(title="RockoAgents Bridge", version="5.0.0", docs_url="/docs")
@@ -301,7 +300,7 @@ def run_executor_sync(eid: str, context: Dict, env_overrides: Dict = {}, dry_run
 
 # -- Subsystem init ------------------------------------------------------------
 def _init_subsystems():
-    global _model_mgr, _task_worker, _scheduler, _orchestrator
+    global _model_mgr, _task_worker, _scheduler, _orchestrator, _runtime_mgr, _exec_engine
     from bridge import model_manager as mm
     env = build_env()
     mm.init(PROJECT, env)
@@ -1234,80 +1233,94 @@ def model_config():
     return safe
 
 # -- Runtime routes ------------------------------------------------------------
+def _runtime_list_payload() -> Dict[str, Any]:
+    """Return runtimes using whichever RuntimeManager API this build exposes."""
+    if not _runtime_mgr:
+        raise HTTPException(503, "Runtime manager not initialised")
+    if hasattr(_runtime_mgr, "list_runtimes"):
+        runtimes = _runtime_mgr.list_runtimes()
+    elif hasattr(_runtime_mgr, "get_runtimes"):
+        runtimes = _runtime_mgr.get_runtimes()
+    else:
+        runtimes = []
+    return {"runtimes": runtimes, "count": len(runtimes) if isinstance(runtimes, list) else 0}
+
+def _runtime_execute(runtime_id: str, context: Dict[str, Any], agent_id: Optional[str] = None, dry_run: bool = False) -> Dict[str, Any]:
+    """Execute a runtime while supporting both legacy and newer RuntimeManager method names."""
+    if not _runtime_mgr:
+        raise HTTPException(503, "Runtime manager not initialised")
+    if hasattr(_runtime_mgr, "execute"):
+        return _runtime_mgr.execute(runtime_id, context, agent_id, dry_run)
+    if hasattr(_runtime_mgr, "run"):
+        try:
+            return _runtime_mgr.run(runtime_id, context, agent_id=agent_id, dry_run=dry_run)
+        except TypeError:
+            return _runtime_mgr.run(runtime_id, context, dry_run=dry_run)
+    raise HTTPException(500, "Runtime manager has no executable runtime method")
+
+def _runtime_requires_approval(runtime_id: str, agent_id: Optional[str] = None) -> Dict[str, Any]:
+    """Normalize runtime permission checks across RuntimeManager versions."""
+    if not _runtime_mgr:
+        raise HTTPException(503, "Runtime manager not initialised")
+    if hasattr(_runtime_mgr, "check_permission"):
+        try:
+            perm = _runtime_mgr.check_permission(runtime_id, agent_id)
+        except TypeError:
+            perm = _runtime_mgr.check_permission(runtime_id, None)
+        if not perm.get("allowed", False):
+            raise HTTPException(403, perm.get("reason", "Runtime permission denied"))
+        return perm
+    return {"allowed": True, "requires_approval": False}
+
 @app.get("/runtimes")
 def list_runtimes():
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    return {"runtimes": _runtime_mgr.list_runtimes(), "count": len(_runtime_mgr.list_runtimes())}
+    return _runtime_list_payload()
 
 @app.get("/runtimes/{runtime_id}")
 def get_runtime(runtime_id: str):
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    rt = _runtime_mgr.get_runtime(runtime_id)
-    if not rt: raise HTTPException(404, f"Runtime '{runtime_id}' not found")
+    if not _runtime_mgr:
+        raise HTTPException(503, "Runtime manager not initialised")
+    rt = _runtime_mgr.get_runtime(runtime_id) if hasattr(_runtime_mgr, "get_runtime") else None
+    if not rt:
+        raise HTTPException(404, f"Runtime not found: {runtime_id}")
     return rt
 
 @app.post("/runtimes/{runtime_id}/test")
 def test_runtime(runtime_id: str):
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    return _runtime_mgr.execute(runtime_id, {"_test": True}, dry_run=True)
+    return _runtime_execute(runtime_id, {"_test": True, "_dry_run": True}, agent_id=None, dry_run=True)
 
 @app.post("/runtimes/{runtime_id}/run")
-def run_runtime(runtime_id: str, req: RuntimeRunRequest):
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    perm = _runtime_mgr.check_permission(runtime_id, req.agent_id)
-    if not perm["allowed"]:
-        raise HTTPException(403, perm["reason"])
-    if perm.get("requires_approval") and not req.dry_run:
-        return {"ok": False, "requires_approval": True,
-                "message": f"Runtime '{runtime_id}' requires human approval before execution",
-                "runtime_id": runtime_id}
-    return _runtime_mgr.execute(runtime_id, req.context, req.agent_id, req.dry_run)
-
-
-# -- Runtime endpoints ---------------------------------------------------------
-@app.get("/runtimes")
-def list_runtimes():
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    return {"runtimes": _runtime_mgr.get_runtimes()}
-
-@app.get("/runtimes/{runtime_id}")
-def get_runtime(runtime_id: str):
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    rt = _runtime_mgr.get_runtime(runtime_id)
-    if not rt: raise HTTPException(404, f"Runtime not found: {runtime_id}")
-    return rt
-
-@app.post("/runtimes/{runtime_id}/test")
-def test_runtime(runtime_id: str):
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    result = _runtime_mgr.run(runtime_id, {"_test": True, "_dry_run": True},
-                               agent_id=None, dry_run=True)
-    return result
-
-@app.post("/runtimes/{runtime_id}/run")
-def run_runtime_route(runtime_id: str, req: RunRequest):
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    ctx = {**req.context, **req.input}
+def run_runtime_route(runtime_id: str, req: RuntimeRunRequest):
+    ctx = dict(req.context or {})
     if req.dry_run:
-        return _runtime_mgr.run(runtime_id, ctx, dry_run=True)
-    perm = _runtime_mgr.check_permission(runtime_id, None)
-    if not perm["allowed"]:
-        raise HTTPException(403, perm["reason"])
-    if _runtime_mgr.requires_approval(runtime_id):
-        raise HTTPException(403, f"Runtime '{runtime_id}' requires human approval before execution")
-    result = _runtime_mgr.run(runtime_id, ctx)
-    # If executor delegation, hand off
-    if result.get("delegate_to_executor"):
-        eid = result["delegate_to_executor"]
-        return run_executor_sync(eid, ctx)
+        return _runtime_execute(runtime_id, ctx, agent_id=req.agent_id, dry_run=True)
+    perm = _runtime_requires_approval(runtime_id, req.agent_id)
+    requires = bool(perm.get("requires_approval"))
+    if not requires and hasattr(_runtime_mgr, "requires_approval"):
+        try:
+            requires = bool(_runtime_mgr.requires_approval(runtime_id))
+        except Exception:
+            requires = False
+    if requires:
+        return {
+            "ok": False,
+            "requires_approval": True,
+            "message": f"Runtime '{runtime_id}' requires human approval before execution",
+            "runtime_id": runtime_id,
+        }
+    result = _runtime_execute(runtime_id, ctx, agent_id=req.agent_id, dry_run=False)
+    if isinstance(result, dict) and result.get("delegate_to_executor"):
+        return run_executor_sync(result["delegate_to_executor"], ctx)
     return result
 
 @app.post("/runtimes/reload")
 def reload_runtimes():
-    if not _runtime_mgr: raise HTTPException(503, "Runtime manager not initialised")
-    _runtime_mgr.reload()
-    return {"status": "reloaded", "count": len(_runtime_mgr.get_runtimes())}
-
+    if not _runtime_mgr:
+        raise HTTPException(503, "Runtime manager not initialised")
+    if hasattr(_runtime_mgr, "reload"):
+        _runtime_mgr.reload()
+    payload = _runtime_list_payload()
+    return {"status": "reloaded", "count": payload.get("count", 0)}
 
 # -- System Verification -------------------------------------------------------
 @app.get("/system/test")
@@ -1488,16 +1501,51 @@ def _users_file() -> Path:
 def _sessions_file() -> Path:
     return APP_DATA_DIR / "sessions.json"
 
+def _dedupe_paths(paths: List[Path]) -> List[Path]:
+    seen = set()
+    out: List[Path] = []
+    for raw in paths:
+        try:
+            p = Path(raw).expanduser().resolve()
+        except Exception:
+            continue
+        key = str(p).lower() if sys.platform == "win32" else str(p)
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
 def _legacy_data_dirs() -> List[Path]:
     """Old builds reused DATA_DIR for both app accounts and project runtime state."""
-    candidates: List[Path] = []
-    for d in (DATA_DIR, PROJECT_DATA_DIR):
-        try:
-            if d and d != APP_DATA_DIR and d not in candidates:
-                candidates.append(d)
-        except Exception:
-            pass
-    return candidates
+    candidates: List[Path] = [DATA_DIR, PROJECT_DATA_DIR]
+    if PROJECT_ROOT:
+        candidates.append(Path(PROJECT_ROOT) / "data" / "rockoagents")
+    return [p for p in _dedupe_paths(candidates) if p != APP_DATA_DIR]
+
+def _company_recovery_dirs() -> List[Path]:
+    """Known places older builds may have written companies.json."""
+    candidates: List[Path] = [
+        APP_DATA_DIR,
+        DATA_DIR,
+        PROJECT_DATA_DIR,
+        ROCKO_ROOT / "data" / "rockoagents",
+        BRIDGE_DIR / "data" / "rockoagents",
+        Path.cwd() / "data" / "rockoagents",
+    ]
+    if PROJECT_ROOT:
+        root = Path(PROJECT_ROOT)
+        candidates.extend([
+            root / "data" / "rockoagents",
+            root.parent / "data" / "rockoagents",
+        ])
+    home = Path.home()
+    candidates.extend([
+        home / "Documents" / "RockoAgentHub" / "data" / "rockoagents",
+        home / "Documents" / "RockoAgents" / "data" / "rockoagents",
+        home / "Documents" / "Companies" / "RockoAgentHub" / "data" / "rockoagents",
+        home / "Documents" / "Companies" / "RockoAgents" / "data" / "rockoagents",
+    ])
+    return _dedupe_paths(candidates)
 
 def _read_json_dict_file(fp: Path) -> dict:
     if fp.exists():
@@ -1694,20 +1742,29 @@ def _read_companies_file(fp: Path) -> dict:
 def _load_companies() -> dict:
     companies = _read_companies_file(_companies_file())
 
-    # Backward compatibility: previous bridge builds sometimes read/wrote companies
-    # from project-scoped DATA_DIR. Merge those back into the global app registry
-    # so login always shows the Welcome Back company picker.
-    recovered = False
-    for d in _legacy_data_dirs():
+    # Backward compatibility: recover companies that older builds wrote to
+    # project-scoped folders or nearby app folders instead of APP_DATA_DIR.
+    recovered = 0
+    for d in _company_recovery_dirs():
         legacy = _read_companies_file(d / "companies.json")
         for cid, co in legacy.items():
+            if not isinstance(co, dict):
+                continue
             if cid not in companies:
                 companies[cid] = co
-                recovered = True
+                recovered += 1
+            else:
+                existing = companies[cid]
+                old_updated = str(existing.get("updated_at", existing.get("created_at", "")))
+                new_updated = str(co.get("updated_at", co.get("created_at", "")))
+                if new_updated and new_updated > old_updated:
+                    merged = {**existing, **co}
+                    companies[cid] = merged
+                    recovered += 1
 
     if recovered:
         _save_companies(companies)
-        _log("info", f"Recovered {len(companies)} company record(s) into global app registry")
+        _log("info", f"Recovered/merged {recovered} company record(s) into global app registry")
 
     return companies
 
@@ -1728,8 +1785,22 @@ async def list_companies(request: Request):
     if token:
         user = _get_user_from_session(token)
         if user:
-            companies = {k: v for k, v in companies.items()
-                        if not v.get("user_id") or v.get("user_id") == user["id"]}
+            repaired = False
+            visible = {}
+            for k, v in companies.items():
+                owner = v.get("user_id")
+                # Local recovery rule: old/orphaned records may have no owner.
+                # Attach only ownerless local records to the authenticated account.
+                if not owner:
+                    v["user_id"] = user["id"]
+                    owner = user["id"]
+                    repaired = True
+                if owner == user["id"]:
+                    visible[k] = v
+            if repaired:
+                _save_companies(companies)
+                _log("info", f"Repaired recovered company ownership for user {user['id']}")
+            companies = visible
     return {"companies": list(companies.values())}
 
 @app.post("/companies")
@@ -2317,6 +2388,7 @@ async def validate_provider_endpoint(provider_id: str, request: Request):
 
 def cli_main(argv=None):
     """Callable entry point - used by PyInstaller exe and rockoagents.cli"""
+    global VERBOSE
     import sys as _s
     if argv is not None:
         _s.argv = argv
@@ -2352,9 +2424,12 @@ def cli_main(argv=None):
         print(f"  Subsystem warning: {e}")
 
     # Run validation silently - results available at /validate endpoint
+    validation_result = {"errors": [], "warns": []}
     if ok:
-        try: validate_project()
-        except: pass
+        try:
+            validation_result = validate_project()
+        except Exception:
+            validation_result = {"errors": [], "warns": []}
     print()
 
     # -- Open app window ----------------------------------------------------
@@ -2414,8 +2489,8 @@ def cli_main(argv=None):
         print(f"|  [verbose] Project root: {PROJECT_ROOT or 'none'}")
         print(f"|  [verbose] App data dir: {APP_DATA_DIR}")
         print(f"|  [verbose] Project data: {PROJECT_DATA_DIR}")
-        for e in v.get("errors", []): print(f"|  FAIL {e}")
-        for w in v.get("warns",  []): print(f"|  WARN {w}")
+        for e in validation_result.get("errors", []): print(f"|  FAIL {e}")
+        for w in validation_result.get("warns",  []): print(f"|  WARN {w}")
         print("|")
     if not args.no_browser:
         print(f"+  RockoAgents is ready.")
