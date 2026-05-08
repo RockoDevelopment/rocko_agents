@@ -5220,7 +5220,29 @@ var _skillsLibrary  = [];
 var _skillsTargetId = null;
 var _skillsSource   = 'local';
 
-
+async function loadSkillsLibrary(forceRemote) {
+  if (!forceRemote && _skillsLibrary.length) return;
+  var d = null;
+  try {
+    d = await bridgeGet('/skills/browse');
+    if (d && Array.isArray(d.skills) && d.skills.length) {
+      _skillsLibrary = d.skills;
+      _skillsSource  = d.source || 'skills.sh';
+      RockoCore.log('info', 'Skills loaded from ' + _skillsSource + ': ' + d.skills.length + ' skill(s)');
+      return;
+    }
+  } catch(e) {}
+  try {
+    d = await bridgeGet('/skills');
+    if (d && Array.isArray(d.skills) && d.skills.length) {
+      _skillsLibrary = d.skills;
+      _skillsSource  = 'local';
+      RockoCore.log('info', 'Skills loaded from local: ' + d.skills.length + ' skill(s)');
+      return;
+    }
+  } catch(e) {}
+  RockoCore.log('warn', 'No skills found. Bridge must be running and skills.sh must be reachable.');
+}
 
 function getAgentSkills(agentId) {
   var agent = RockoCore.getAgent(agentId);
