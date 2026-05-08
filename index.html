@@ -2065,63 +2065,155 @@ const RockoCore = (() => {
     if(output)Object.assign(ctx.current_context,output);
     emit('pipelineStepUpdate',{run_id:ctx.run_id,step_id:stepId,status,output,duration_ms:durationMs});
   }
+  async function _executeStep(step,manifest,projectName){
+    _stepStatus(_runCtx,step.step_id,'running');
+    log('info','  → ['+step.type.toUpperCase()+'] '+step.label);
+    const t0=Date.now();
+
+    if(step.requires_approval){
+      _stepStatus(_runCtx,step.step_id,'pending_approval');
+      const approval=await _waitForApproval(step,{..._runCtx.current_context});
+      if(approval.decision==='reject'){
+        _stepStatus(_runCtx,step.step_id,'rejected',null,'',Date.now()-t0,'Rejected by operator');
+        _runCtx.status='rejected';_runCtx.completed_at=new Date().toISOString();
+        emit('pipelineHalted',{step,reason:'operator_rejected',run_ctx:_runCtx});
+        return;
+      }
+      if(approval.modifications)Object.assign(_runCtx.current_context,approval.modifications);
+      log('success','  ✓ Approved: '+step.label);
+    }
+
+    if(step.type==='agent'&&step.agent_id){
+      const result=await callAgent(step.agent_id,JSON.stringify(_runCtx.current_context));
+      const dur=Date.now()-t0;
+      if(!result){
+        _stepStatus(_runCtx,step.step_id,'error',null,'',dur,'Agent call failed');
+        if(manifest.pipeline?.on_error==='halt_and_log'){
+          _runCtx.status='halted';_runCtx.completed_at=new Date().toISOString();
+          emit('pipelineHalted',{step,run_ctx:_runCtx});
+        }
+      }else{
+        const raw=result.content?.find(b=>b.type==='text')?.text||'';
+        let parsed=null;try{parsed=JSON.parse(raw);}catch{parsed={text:raw};}
+        _stepStatus(_runCtx,step.step_id,'complete',{[step.step_id]:parsed},raw,dur);
+        log('success','  ✓ '+step.label);
+      }
+    }else if(step.type==='executor'&&step.executor_id){
+      const ceo=Object.values(_agents).find(a=>a.project===projectName&&a.role==='ceo');
+      const r=await runExecutorViaBridge(step.executor_id,_runCtx.current_context,ceo?.id||null);
+      const dur=Date.now()-t0;
+      if(r.permission_denied){
+        _stepStatus(_runCtx,step.step_id,'blocked',null,'',dur,r.reason);
+        if(manifest.pipeline?.on_error==='halt_and_log'){_runCtx.status='halted';_runCtx.completed_at=new Date().toISOString();emit('pipelineHalted',{step,run_ctx:_runCtx});}
+      }else if(r.skipped){
+        _stepStatus(_runCtx,step.step_id,'skipped',{status:'bridge_offline'},'',dur);
+      }else if(!r.ok&&!r.success){
+        _stepStatus(_runCtx,step.step_id,'error',null,r.stderr||'',dur,r.error||'Executor failed');
+        if(manifest.pipeline?.on_error==='halt_and_log'){_runCtx.status='halted';_runCtx.completed_at=new Date().toISOString();emit('pipelineHalted',{step,run_ctx:_runCtx});}
+      }else{
+        _stepStatus(_runCtx,step.step_id,'complete',r.output||{status:'ok'},r.stdout||'',dur);
+        log('success','  ✓ '+step.label);
+      }
+    }
+  }
+
   async function runPipeline(projectName,inputData={}){
-    const manifest=_projects[projectName]; if(!manifest){log('error','Project not found: '+projectName);return;}
-    const steps=manifest.pipeline.execution_order;
+    const manifest=_projects[projectName];
+    if(!manifest){log('error','Project not found: '+projectName);return;}
+
     _runCtx=_newCtx(projectName,inputData);
     log('system','▶▶ Pipeline: '+projectName+' | '+_runCtx.run_id);
     emit('pipelineStarted',{projectName,run_id:_runCtx.run_id});
 
-    for(const step of steps){
-      _stepStatus(_runCtx,step.step_id,'running');
-      log('info','  → ['+step.type.toUpperCase()+'] '+step.label);
-      const t0=Date.now();
+    // ── Build execution order from live agents — company-agnostic ────────────
+    const liveAgents=Object.values(_agents)
+      .filter(a=>a.project===projectName&&a.pipeline_step&&a.enabled!==false);
 
-      if(step.requires_approval){
-        _stepStatus(_runCtx,step.step_id,'pending_approval');
-        const approval=await _waitForApproval(step,{..._runCtx.current_context});
-        if(approval.decision==='reject'){
-          _stepStatus(_runCtx,step.step_id,'rejected',null,'',Date.now()-t0,'Rejected by operator');
-          _runCtx.status='rejected';_runCtx.completed_at=new Date().toISOString();
-          emit('pipelineHalted',{step,reason:'operator_rejected',run_ctx:_runCtx});
-          _archiveRun(_runCtx); return _runCtx;
-        }
-        if(approval.modifications)Object.assign(_runCtx.current_context,approval.modifications);
-        log('success','✓ Approved: '+step.label);
+    const agentSteps=liveAgents.map(a=>({
+      step_id:a.pipeline_step,
+      label:a.display_name||a.name,
+      type:'agent',
+      agent_id:a.id,
+      requires_approval:a.role==='ceo',
+      pipeline_order:a.pipeline_order||999,
+      outputs_to:a.connections||a.outputs_to||[]
+    }));
+
+    // Executor steps from manifest — agents don't cover these
+    const executorSteps=(manifest.pipeline?.execution_order||[])
+      .filter(s=>s.type==='executor');
+
+    const allSteps=[...agentSteps,...executorSteps];
+
+    if(!allSteps.length){
+      log('warn','No agents with pipeline_step found. Add a Pipeline Step ID to each agent.');
+      _runCtx.status='complete';_runCtx.completed_at=new Date().toISOString();
+      emit('pipelineComplete',{projectName,run_ctx:_runCtx});
+      _archiveRun(_runCtx);return _runCtx;
+    }
+
+    // ── Sort into execution levels ────────────────────────────────────────────
+    const hasEdges=agentSteps.some(s=>(s.outputs_to||[]).length>0);
+    let levels=[];
+
+    if(hasEdges){
+      // DAG topological sort
+      const nodeMap={};
+      allSteps.forEach(s=>{nodeMap[s.agent_id||s.step_id]=s;});
+      const inbound={};
+      allSteps.forEach(s=>{inbound[s.agent_id||s.step_id]=0;});
+      allSteps.forEach(s=>{
+        (s.outputs_to||[]).forEach(tid=>{if(inbound[tid]!==undefined)inbound[tid]++;});
+      });
+      let frontier=allSteps
+        .filter(s=>inbound[s.agent_id||s.step_id]===0)
+        .map(s=>s.agent_id||s.step_id);
+      const visited=new Set();
+      while(frontier.length>0){
+        const level=frontier.filter(id=>!visited.has(id));
+        if(!level.length)break;
+        levels.push(level.map(id=>nodeMap[id]));
+        level.forEach(id=>visited.add(id));
+        const next=[];
+        level.forEach(id=>{
+          const node=nodeMap[id];
+          (node?.outputs_to||[]).forEach(tid=>{
+            if(!visited.has(tid)&&nodeMap[tid]){
+              const allDone=allSteps
+                .filter(s=>(s.outputs_to||[]).includes(tid))
+                .every(s=>visited.has(s.agent_id||s.step_id));
+              if(allDone)next.push(tid);
+            }
+          });
+        });
+        frontier=[...new Set(next)];
       }
+      // Catch any unvisited
+      allSteps.forEach(s=>{
+        const id=s.agent_id||s.step_id;
+        if(!visited.has(id))levels.push([s]);
+      });
+    }else{
+      // Linear — sort by pipeline_order
+      levels=allSteps
+        .sort((a,b)=>(a.pipeline_order||0)-(b.pipeline_order||0))
+        .map(s=>[s]);
+    }
 
-      if(step.type==='agent'&&step.agent_id){
-        const result=await callAgent(step.agent_id,JSON.stringify(_runCtx.current_context));
-        const dur=Date.now()-t0;
-        if(!result){
-          _stepStatus(_runCtx,step.step_id,'error',null,'',dur,'Agent call failed');
-          if(manifest.pipeline.on_error==='halt_and_log'){
-            _runCtx.status='halted';_runCtx.completed_at=new Date().toISOString();
-            emit('pipelineHalted',{step,run_ctx:_runCtx});_archiveRun(_runCtx);return _runCtx;
-          }
-        }else{
-          const raw=result.content?.find(b=>b.type==='text')?.text||'';
-          let parsed=null;try{parsed=JSON.parse(raw);}catch{parsed={text:raw};}
-          _stepStatus(_runCtx,step.step_id,'complete',{[step.step_id]:parsed},raw,dur);
+    // ── Execute each level sequentially ──────────────────────────────────────
+    for(const levelSteps of levels){
+      for(const step of levelSteps){
+        await _executeStep(step,manifest,projectName);
+        if(_runCtx.status==='halted'||_runCtx.status==='rejected'){
+          _archiveRun(_runCtx);return _runCtx;
         }
-      }else if(step.type==='executor'&&step.executor_id){
-        const ceo=Object.values(_agents).find(a=>a.project===projectName&&a.role==='ceo');
-        const r=await runExecutorViaBridge(step.executor_id,_runCtx.current_context,ceo?.id||null);
-        const dur=Date.now()-t0;
-        if(r.permission_denied){
-          _stepStatus(_runCtx,step.step_id,'blocked',null,'',dur,r.reason);
-          if(manifest.pipeline.on_error==='halt_and_log'){_runCtx.status='halted';_runCtx.completed_at=new Date().toISOString();emit('pipelineHalted',{step,run_ctx:_runCtx});_archiveRun(_runCtx);return _runCtx;}
-        }else if(r.skipped){_stepStatus(_runCtx,step.step_id,'skipped',{status:'bridge_offline'},'',dur);
-        }else if(!r.ok&&!r.success){
-          _stepStatus(_runCtx,step.step_id,'error',null,r.stderr||'',dur,r.error||'Executor failed');
-          if(manifest.pipeline.on_error==='halt_and_log'){_runCtx.status='halted';_runCtx.completed_at=new Date().toISOString();emit('pipelineHalted',{step,run_ctx:_runCtx});_archiveRun(_runCtx);return _runCtx;}
-        }else{_stepStatus(_runCtx,step.step_id,'complete',r.output||{status:'ok'},r.stdout||'',dur);}
       }
     }
+
     _runCtx.status='complete';_runCtx.completed_at=new Date().toISOString();
     log('success','✓ Pipeline complete: '+projectName);
     emit('pipelineComplete',{projectName,run_ctx:_runCtx});
-    _archiveRun(_runCtx); return _runCtx;
+    _archiveRun(_runCtx);return _runCtx;
   }
   function getRunContext(){return _runCtx;}
 
