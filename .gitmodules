@@ -1,0 +1,3 @@
+[submodule "Clawd-Code"]
+	path = Clawd-Code
+	url = https://github.com/GPT-AGI/Clawd-Code.git
