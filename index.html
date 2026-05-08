@@ -5812,6 +5812,17 @@ openAgent = function(id) {
 async function bootCompanyLayer() {
   loadSkillsLibrary();
 
+  // Make the company picker reliable after login.
+  // Older builds stored companies in localStorage/PGlite first, while newer builds
+  // also scope them to the signed-in bridge account. Restore local durable state
+  // before deciding the user has no companies.
+  try {
+    if (typeof bootPGlite === 'function') await bootPGlite();
+    if (typeof _pgRestoreState === 'function') await _pgRestoreState();
+  } catch(e) {
+    console.warn('Company restore before picker failed:', e);
+  }
+
   // ── Primary: load companies from bridge (source of truth, tied to account) ─
   var bridgeCompanies = null;
   try {
@@ -5819,48 +5830,53 @@ async function bootCompanyLayer() {
     if (resp && resp.companies && resp.companies.length > 0) {
       bridgeCompanies = resp.companies;
     }
-  } catch(e) { /* bridge offline — fall through to localStorage */ }
+  } catch(e) { /* bridge offline — fall through to local/PGlite cache */ }
 
   if (bridgeCompanies) {
-    // Merge logos from localStorage (stored browser-side only)
-    var localList = getCompanies();
-    bridgeCompanies = bridgeCompanies.map(function(co) {
-      var local = localList.find(function(l){ return l.id === co.id; });
-      if (local && local.logo) co.logo = local.logo;
-      return co;
-    });
-    // Cache to localStorage (without _manifest)
+    // Merge browser-only fields and cached manifests from local/PGlite.
     var localList = getCompanies();
     var merged = bridgeCompanies.map(function(c) {
-        var local = localList.find(function(l){ return l.id === c.id; });
-        var copy = Object.assign({}, c);
-        if (local) {
-            if (local._manifest)        copy._manifest        = local._manifest;
-            if (local.default_provider) copy.default_provider = local.default_provider;
-            if (local.default_model)    copy.default_model    = local.default_model;
-            if (local.base_url)         copy.base_url         = local.base_url;
-            if (local.logo)             copy.logo             = local.logo;
-        }
-        return copy;
+      var local = localList.find(function(l){ return l.id === c.id; });
+      var copy = Object.assign({}, c);
+      if (local) {
+        if (local._manifest)        copy._manifest        = local._manifest;
+        if (local.default_provider) copy.default_provider = local.default_provider;
+        if (local.default_model)    copy.default_model    = local.default_model;
+        if (local.base_url)         copy.base_url         = local.base_url;
+        if (local.logo)             copy.logo             = local.logo;
+        if (local.agents)           copy.agents           = local.agents;
+      }
+      return copy;
     });
-    try { localStorage.setItem(COMPANIES_KEY, JSON.stringify(merged.map(function(c){ var x = Object.assign({},c); delete x._manifest; return x; }))); } catch(e) {}
-    _companiesCache = merged;
-    // Always show onboarding — returning users see picker, new users see create form
+    saveCompanies(merged);
     renderCompanyRail();
-    showOnboarding();
+    showOnboardingPicker();
     return;
   }
 
-  // ── Fallback: bridge offline — use localStorage cache ─────────────────────
+  // ── Fallback: no account-scoped bridge companies yet — use local/PGlite cache ─
   var companies = getCompanies();
   if (companies.length > 0) {
+    // Backfill bridge account registry so next login sees the Welcome Back picker.
+    companies.forEach(function(co) {
+      bridgePost('/companies', {
+        id: co.id,
+        display_name: co.display_name || co.id,
+        description: co.description || '',
+        logo_path: co.logo_path || '',
+        project_path: co.project_path || (co._manifest && co._manifest.project && co._manifest.project.root_path) || '',
+        active: !!co.active
+      }).catch(function(){});
+    });
     renderCompanyRail();
-    showOnboarding();
+    showOnboardingPicker();
     return;
   }
 
   // ── No companies anywhere — show create form ──────────────────────────────
-  showOnboarding();
+  showOnboardingCreate();
+  var overlay = document.getElementById('onboardingOverlay');
+  if (overlay) overlay.classList.add('show');
 }
 
 
