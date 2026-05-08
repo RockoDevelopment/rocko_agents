@@ -451,21 +451,22 @@ body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradi
 body { display:flex; flex-direction:row; overflow:hidden; }
 .app-shell { visibility:hidden; }
 .app-shell.auth-ready { visibility:visible; }
-.company-rail{width:96px;min-width:96px;background:var(--bg-void);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:8px;overflow-y:auto;flex-shrink:0;z-index:50;}
+.company-rail{width:96px;min-width:96px;background:var(--bg-void);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:0;overflow-y:auto;flex-shrink:0;z-index:50;}
 .company-rail::-webkit-scrollbar{display:none;}
 .company-slot{width:80px;height:80px;border-radius:14px;background:var(--bg-panel);border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:var(--cond);font-size:30px;font-weight:700;color:var(--text-dim);transition:all .2s;position:relative;overflow:hidden;flex-shrink:0;}
+.company-slot + .company-slot{margin-top:18px;}
 .company-slot img{width:100%;height:100%;object-fit:cover;display:block;position:absolute;top:0;left:0;}
 .company-slot:hover{border-color:var(--border-bright);color:var(--text-primary);}
 .company-slot.active{border-color:var(--accent);color:var(--accent);}
 .company-slot img{width:100%;height:100%;object-fit:cover;}
-.company-slot-add{width:80px;height:80px;border-radius:14px;background:transparent;border:2px dashed var(--border);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:28px;color:var(--text-dim);transition:all .2s;margin-top:4px;}
+.company-slot-add{width:80px;height:80px;border-radius:14px;background:transparent;border:2px dashed var(--border);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:28px;color:var(--text-dim);transition:all .2s;margin-top:18px;flex-shrink:0;}
 .company-slot-add:hover{border-color:var(--accent);color:var(--accent);}
 .company-slot-edit{position:absolute;bottom:2px;right:2px;width:18px;height:18px;background:rgba(0,0,0,.65);border-radius:4px;font-size:11px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);cursor:pointer;opacity:0;transition:opacity .15s;z-index:10;}
 .company-slot:hover .company-slot-edit{opacity:1;}
 .company-slot-edit:hover{color:var(--accent);background:rgba(0,0,0,.9);}
 .company-slot-tip{position:absolute;left:88px;top:50%;transform:translateY(-50%);background:var(--bg-panel);border:1px solid var(--border-bright);padding:4px 10px;font-family:var(--mono);font-size:10px;color:var(--text-primary);white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s;z-index:200;}
 .company-slot:hover .company-slot-tip{opacity:1;}
-.company-divider{width:50px;height:1px;background:var(--border);margin:2px 0;}
+.company-divider{width:50px;height:1px;background:var(--border);margin:18px 0 0;flex-shrink:0;}
 .app-shell{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;}
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2409,6 +2410,7 @@ function refreshAll() {
   updateStats();
   try { renderSettings(); } catch (e) { console.warn('renderSettings skipped:', e && e.message ? e.message : e); }
   renderRunHistory(); refreshTasks(); updateSavedLabel();
+  try { renderSkillDelegationPanel(); } catch (e) {}
 }
 
 function startClock() {
@@ -2764,19 +2766,7 @@ function openAgent(id){
   document.getElementById('editorStep').value=a.pipeline_step||'';
   document.getElementById('editorScriptPath').value=a.local_code?.script_path||'';
   document.getElementById('editorEntryPoint').value=a.local_code?.entry||a.local_code?.entry_point||'';
-  var agentSkillsEl = document.getElementById('agentSkillsDisplay');
-  if(agentSkillsEl){
-    var assignedSkills = a.skills || [];
-    if(assignedSkills.length){
-      agentSkillsEl.innerHTML = assignedSkills.map(function(s){
-        var name = typeof s === 'string' ? s : (s.name || s.skill_name || s.id || String(s));
-        return '<span style="font-family:var(--mono);font-size:10px;padding:3px 8px;background:var(--accent-dim);color:var(--accent);border-radius:3px;border:1px solid rgba(71,130,255,.3);">' + name + '</span>';
-      }).join('');
-    } else {
-      agentSkillsEl.innerHTML = '<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">No skills assigned</span>';
-    }
-  }
-  updateExternalConnectionRows(a);
+  document.getElementById('editorTags').value=(a.skills||a.tags||[]).join(', ');
   document.getElementById('metaId').textContent=a.id;
   document.getElementById('metaProject').textContent=a.project;
   document.getElementById('metaProvider').textContent=a.provider_key||a.provider||'—';
@@ -2820,101 +2810,40 @@ function saveAgent(){
   if(!currentAgentId)return;
 
   const h=document.getElementById('saveHint');
-  const existing=RockoCore.getAgent(currentAgentId) || {};
-  const proj=existing.project || RockoCore.getActiveProject();
-  const manifest=RockoCore.getProject(proj);
-
-  const name=document.getElementById('editorName').value;
-  const role=document.getElementById('editorRole').value;
-  const modelOverride=document.getElementById('editorModelOverride').value.trim()||null;
-  const description=document.getElementById('editorDesc').value;
-  const instructions=document.getElementById('editorInstructions').value;
   const pipelineStep=document.getElementById('editorStep').value.trim();
-  const scriptPath=document.getElementById('editorScriptPath').value.trim();
-  const entryPoint=document.getElementById('editorEntryPoint').value.trim();
 
-  const currentLocal=existing.local_code || {};
-  const localCode=scriptPath ? {
-    ...currentLocal,
-    type: currentLocal.type || 'python_module',
-    script_path: scriptPath,
-    entry: entryPoint || currentLocal.entry || currentLocal.entry_point || '',
-    entry_point: entryPoint || currentLocal.entry_point || currentLocal.entry || '',
-    working_dir: currentLocal.working_dir || '',
-    env_file: currentLocal.env_file || '.env',
-    run_mode: currentLocal.run_mode || 'subprocess'
-  } : null;
-
-  const updatedAgent={
-    name,
-    display_name:name,
-    role,
-    model_override:modelOverride,
-    description,
-    instructions,
-    _instructions:instructions,
+  RockoCore.updateAgent(currentAgentId,{
+    name:document.getElementById('editorName').value,
+    role:document.getElementById('editorRole').value,
+    model_override:document.getElementById('editorModelOverride').value.trim()||null,
+    description:document.getElementById('editorDesc').value,
+    instructions:document.getElementById('editorInstructions').value,
     pipeline_step:pipelineStep,
     status:editorStatus,
     connections:editorConns,
     outputs_to:editorConns,
-    local_code:localCode,
-    local_script_path:scriptPath,
-    instruction_file:existing.instruction_file || ('agents\\'+currentAgentId+'\\AGENT.md'),
-    // skills are assigned through the Skills delegation panel or CEO delegation
-    skills:(existing.skills || []),
-    tags:(existing.tags || []),
-    apis:existing.apis || [],
-    project_tools:existing.project_tools || ['filesystem','http']
-  };
+    skills:document.getElementById('editorTags').value
+      .split(',')
+      .map(s=>s.trim())
+      .filter(Boolean),
+    tags:document.getElementById('editorTags').value
+      .split(',')
+      .map(s=>s.trim())
+      .filter(Boolean),
+    apis:[],
+    project_tools:['filesystem','http']
+  });
 
-  RockoCore.updateAgent(currentAgentId,updatedAgent);
-
-  // Persist editor changes into the project manifest too. This prevents a refresh,
-  // company sync, or returning to the agent from restoring stale instructions,
-  // instruction_file, local script path, or entry point from the old manifest copy.
-  if(manifest){
-    manifest.agents=manifest.agents||[];
-    let def=manifest.agents.find(a=>a&&a.id===currentAgentId);
-    if(!def){
-      def={id:currentAgentId};
-      manifest.agents.push(def);
+  // Sync outputs_to into the manifest pipeline step so DAG renderer stays current
+  const proj=RockoCore.getActiveProject();
+  const manifest=RockoCore.getProject(proj);
+  if(manifest&&manifest.pipeline&&Array.isArray(manifest.pipeline.execution_order)){
+    const step=manifest.pipeline.execution_order.find(s=>s.agent_id===currentAgentId);
+    if(step){
+      step.outputs_to=editorConns;
+      if(pipelineStep) step.step_id=pipelineStep;
     }
-    def.name=name;
-    def.display_name=name;
-    def.role=role;
-    def.description=description;
-    def.model_override=modelOverride;
-    def.pipeline_step=pipelineStep;
-    def.status=editorStatus;
-    def.enabled=existing.enabled!==false;
-    def.type=existing.type || def.type || 'prompt';
-    def.instruction_file=updatedAgent.instruction_file;
-    def._instructions=instructions;
-    def.local_code=localCode;
-    def.outputs_to=editorConns;
-    def.connections=editorConns;
-    def.skills=existing.skills || def.skills || [];
-    def.tags=existing.tags || def.tags || [];
-    def.apis=existing.apis || def.apis || [];
-    def.project_tools=existing.project_tools || def.project_tools || ['filesystem','http'];
-
-    manifest.pipeline=manifest.pipeline||{mode:'sequential',on_block:'halt',on_error:'halt_and_log',execution_order:[]};
-    manifest.pipeline.execution_order=manifest.pipeline.execution_order||[];
-    let step=manifest.pipeline.execution_order.find(s=>s.agent_id===currentAgentId);
-    if(!step){
-      step={step_id:pipelineStep||currentAgentId+'_step',label:name,type:'agent',agent_id:currentAgentId};
-      manifest.pipeline.execution_order.push(step);
-    }
-    step.label=name;
-    step.step_id=pipelineStep||step.step_id||currentAgentId+'_step';
-    step.agent_id=currentAgentId;
-    step.type='agent';
-    step.outputs_to=editorConns;
-    step.requires_approval=role==='ceo' || step.requires_approval===true;
   }
-
-  if(typeof syncCompanyAgentCache==='function' && proj){ syncCompanyAgentCache(proj); }
-  if(typeof RockoCore.saveState==='function'){ RockoCore.saveState(); }
 
   if(h){ h.textContent='✓ Saved'; h.style.color='var(--green)'; }
   refreshAll();
@@ -4307,6 +4236,8 @@ function _activateCompany(co) {
 
     var activeProjName = manifest.project ? manifest.project.name : co.id;
     RockoCore.setActiveProject(activeProjName);
+    _skillDelegationProjectName = activeProjName;
+    _skillDelegationAgentId = null;
 
     if (typeof ensureCompanyCEO === 'function') {
       ensureCompanyCEO(activeProjName, co.display_name || co.id, co.description || '');
@@ -5315,78 +5246,6 @@ function autoMigrateExistingProject() {
 }
 
 
-
-function updateExternalConnectionRows(a) {
-  if (!a) return;
-  var isCEO = String(a.role || '').toLowerCase() === 'ceo' || a.id === 'ceo_agent';
-  var tgRow = document.getElementById('telegramConnRow');
-  var tgBtn = document.getElementById('telegramConnBtn');
-  var tgStatus = document.getElementById('telegramStatus');
-  var waRow = document.getElementById('whatsappConnRow');
-  var waBtn = document.getElementById('whatsappConnBtn');
-  var waStatus = document.getElementById('whatsappStatus');
-
-  if (tgRow) {
-    tgRow.style.opacity = isCEO ? '1' : '0.4';
-    tgRow.title = isCEO ? '' : 'Telegram is CEO only';
-  }
-  if (tgBtn) {
-    tgBtn.disabled = !isCEO;
-    tgBtn.textContent = !isCEO ? 'CEO Only' : (a.telegram_connected ? 'Disconnect' : 'Connect');
-  }
-  if (tgStatus) {
-    tgStatus.textContent = !isCEO ? 'CEO only' : (a.telegram_connected ? 'Connected — @' + (a.telegram_handle || 'bot') : 'Not connected');
-  }
-
-  if (waRow) {
-    waRow.style.opacity = isCEO ? '1' : '0.4';
-    waRow.title = isCEO ? '' : 'WhatsApp is CEO only';
-  }
-  if (waBtn) {
-    waBtn.disabled = !isCEO;
-    waBtn.textContent = !isCEO ? 'CEO Only' : (a.whatsapp_connected ? 'Disconnect' : 'Connect');
-  }
-  if (waStatus) {
-    waStatus.textContent = !isCEO ? 'CEO only' : (a.whatsapp_connected ? 'Connected — ' + (a.whatsapp_number || '') : 'Not connected');
-  }
-}
-
-function toggleTelegramConnection() {
-  var a = RockoCore.getAgent(currentAgentId);
-  if (!a) return;
-  var isCEO = String(a.role || '').toLowerCase() === 'ceo' || a.id === 'ceo_agent';
-  if (!isCEO) { toastErr('Telegram is only available on the CEO agent.'); return; }
-  if (a.telegram_connected) {
-    RockoCore.updateAgent(currentAgentId, {telegram_connected:false, telegram_handle:''});
-    updateExternalConnectionRows(RockoCore.getAgent(currentAgentId));
-    toastOk('Telegram disconnected.');
-  } else {
-    var handle = prompt('Enter your Telegram Bot Token:');
-    if (!handle) return;
-    RockoCore.updateAgent(currentAgentId, {telegram_connected:true, telegram_handle:handle});
-    updateExternalConnectionRows(RockoCore.getAgent(currentAgentId));
-    toastOk('Telegram connected.');
-  }
-}
-
-function toggleWhatsappConnection() {
-  var a = RockoCore.getAgent(currentAgentId);
-  if (!a) return;
-  var isCEO = String(a.role || '').toLowerCase() === 'ceo' || a.id === 'ceo_agent';
-  if (!isCEO) { toastErr('WhatsApp is only available on the CEO agent.'); return; }
-  if (a.whatsapp_connected) {
-    RockoCore.updateAgent(currentAgentId, {whatsapp_connected:false, whatsapp_number:''});
-    updateExternalConnectionRows(RockoCore.getAgent(currentAgentId));
-    toastOk('WhatsApp disconnected.');
-  } else {
-    var number = prompt('Enter your WhatsApp number (e.g. +14155552671):');
-    if (!number) return;
-    RockoCore.updateAgent(currentAgentId, {whatsapp_connected:true, whatsapp_number:number});
-    updateExternalConnectionRows(RockoCore.getAgent(currentAgentId));
-    toastOk('WhatsApp connected.');
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════
 // SKILLS SYSTEM — powered by skills.sh (Vercel's open skills directory)
 // CEO agent can browse skills.sh and assign skills to other agents.
@@ -5396,6 +5255,7 @@ var _skillsLibrary  = [];
 var _skillsTargetId = null;
 var _skillsSource   = 'local';
 var _skillDelegationAgentId = null;
+var _skillDelegationProjectName = null;
 
 function renderSkillsTab() {
   var el = document.getElementById('skillsTabList');
@@ -5450,6 +5310,7 @@ function copySkillId(btn) {
   }
 }
 
+
 function skillPanelEscape(v) {
   return String(v == null ? '' : v).replace(/[&<>'"]/g, function(c) {
     return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c];
@@ -5460,6 +5321,10 @@ function renderSkillDelegationPanel() {
   var panel = document.getElementById('skillDelegationPanel');
   if (!panel) return;
   var proj = RockoCore.getActiveProject();
+  if (_skillDelegationProjectName !== proj) {
+    _skillDelegationProjectName = proj;
+    _skillDelegationAgentId = null;
+  }
   var agents = RockoCore.getAgents(proj) || [];
   agents = agents.filter(function(a){ return a && a.status !== 'fired' && a.enabled !== false; });
   if (!_skillDelegationAgentId && agents.length) _skillDelegationAgentId = agents[0].id;
@@ -5467,41 +5332,41 @@ function renderSkillDelegationPanel() {
     _skillDelegationAgentId = agents.length ? agents[0].id : null;
   }
   if (!agents.length) {
-    panel.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);padding:20px;text-align:center;">No agents available.</div>';
+    panel.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);padding:20px;text-align:center;">No agents available for this company.</div>';
     return;
   }
-  var selected = RockoCore.getAgent(_skillDelegationAgentId) || agents[0];
+  var selected = agents.find(function(a){ return a.id === _skillDelegationAgentId; }) || agents[0];
   _skillDelegationAgentId = selected.id;
   var tabs = agents.map(function(a){
     var active = a.id === _skillDelegationAgentId;
-    return '<button class="btn ' + (active ? 'btn-primary' : 'btn-ghost') + '" style="font-size:10px;padding:5px 9px;max-width:145px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="selectSkillDelegationAgent(&quot;' + skillPanelEscape(a.id) + '&quot;)">' + skillPanelEscape(a.name || a.id) + '</button>';
+    return '<button class="btn ' + (active ? 'btn-primary' : 'btn-ghost') + '" style="height:22px;font-size:9px;padding:2px 7px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1;" onclick="selectSkillDelegationAgent(&quot;' + skillPanelEscape(a.id) + '&quot;)">' + skillPanelEscape(a.name || a.id) + '</button>';
   }).join('');
   var skills = selected.skills || [];
   var skillsHtml = skills.length ? skills.map(function(s){
     var id = typeof s === 'string' ? s : (s.id || s.skill_id || s.name || '');
     var name = typeof s === 'string' ? s : (s.name || s.skill_name || id);
-    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:var(--bg-panel);border:1px solid var(--border);margin-bottom:6px;">' +
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;background:var(--bg-panel);border:1px solid var(--border);margin-bottom:5px;">' +
       '<div style="min-width:0;flex:1;">' +
-        '<div style="font-family:var(--mono);font-size:11px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(name) + '</div>' +
-        '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(id) + '</div>' +
+        '<div style="font-family:var(--mono);font-size:10px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(name) + '</div>' +
+        '<div style="font-family:var(--mono);font-size:8px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(id) + '</div>' +
       '</div>' +
-      '<button class="btn btn-danger" style="font-size:9px;padding:4px 8px;" onclick="deleteDelegatedSkill(&quot;' + skillPanelEscape(id) + '&quot;)">Delete</button>' +
+      '<button class="btn btn-danger" style="height:22px;font-size:8px;padding:2px 7px;line-height:1;" onclick="deleteDelegatedSkill(&quot;' + skillPanelEscape(id) + '&quot;)">Delete</button>' +
     '</div>';
-  }).join('') : '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);padding:12px;background:var(--bg-panel);border:1px solid var(--border);">No skills assigned to this agent.</div>';
+  }).join('') : '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);padding:10px;background:var(--bg-panel);border:1px solid var(--border);">No skills assigned to this agent.</div>';
   panel.innerHTML =
-    '<div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-bottom:10px;">Agent Skill Delegation</div>' +
-    '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">' + tabs + '</div>' +
-    '<div style="background:var(--bg-card);border:1px solid var(--border);padding:12px;margin-bottom:12px;">' +
-      '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:5px;">Selected Agent</div>' +
-      '<div style="font-family:var(--cond);font-size:18px;font-weight:700;color:var(--text-primary);margin-bottom:2px;">' + skillPanelEscape(selected.name || selected.id) + '</div>' +
-      '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">' + skillPanelEscape(selected.id) + '</div>' +
+    '<div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px;">Agent Skill Delegation</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;max-height:96px;overflow-y:auto;padding-right:3px;">' + tabs + '</div>' +
+    '<div style="background:var(--bg-card);border:1px solid var(--border);padding:8px 10px;margin-bottom:10px;">' +
+      '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:3px;">Selected Agent</div>' +
+      '<div style="font-family:var(--cond);font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(selected.name || selected.id) + '</div>' +
+      '<div style="font-family:var(--mono);font-size:8px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + skillPanelEscape(selected.id) + '</div>' +
     '</div>' +
-    '<div style="display:flex;gap:8px;margin-bottom:14px;">' +
-      '<input id="skillDelegationInput" class="field-input" style="height:32px;font-size:11px;font-family:var(--mono);" placeholder="Paste skill ID, e.g. anthropics/skills/frontend-design" />' +
-      '<button class="btn btn-success" style="height:32px;white-space:nowrap;" onclick="addDelegatedSkill()">Add Skill</button>' +
+    '<div style="display:flex;gap:6px;margin-bottom:12px;">' +
+      '<input id="skillDelegationInput" class="field-input" style="height:28px;font-size:10px;font-family:var(--mono);padding:5px 8px;" placeholder="Paste skill ID, e.g. anthropics/skills/frontend-design" />' +
+      '<button class="btn btn-success" style="height:28px;font-size:9px;padding:3px 9px;white-space:nowrap;" onclick="addDelegatedSkill()">Add Skill</button>' +
     '</div>' +
-    '<div style="font-family:var(--mono);font-size:10px;letter-spacing:1px;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px;">Current Skills</div>' +
-    '<div id="skillDelegationOwnedList">' + skillsHtml + '</div>';
+    '<div style="font-family:var(--mono);font-size:10px;letter-spacing:1px;color:var(--text-dim);text-transform:uppercase;margin-bottom:7px;">Current Skills</div>' +
+    '<div id="skillDelegationOwnedList" style="max-height:180px;overflow-y:auto;padding-right:3px;">' + skillsHtml + '</div>';
 }
 
 function selectSkillDelegationAgent(agentId) {
@@ -5658,7 +5523,6 @@ function applySkillToAgent(skillId, skillData) {
   toastOk('Skill applied: ' + (skillData.name || skillId));
   renderSkillsLibrary();
   renderAgentAppliedSkills();
-  renderSkillDelegationPanel();
 }
 
 function removeSkillFromAgent(skillId) {
@@ -5677,7 +5541,6 @@ function removeSkillFromAgent(skillId) {
   toastOk('Skill removed');
   renderSkillsLibrary();
   renderAgentAppliedSkills();
-  renderSkillDelegationPanel();
 }
 
 function renderAgentAppliedSkills() {
@@ -6981,8 +6844,8 @@ fullBoot();
           <button class="btn btn-ghost" onclick="loadSkillsLibrary(true).then(renderSkillsTab)">⟳ Refresh</button>
         </div>
       </div>
-      <div class="auto-body" style="max-width:none;display:grid;grid-template-columns:minmax(520px, 1fr) 420px;gap:20px;align-items:start;">
-        <div style="min-width:0;">
+      <div style="flex:1;overflow:hidden;display:flex;padding:20px 24px;gap:18px;">
+        <div style="flex:1;min-width:0;overflow-y:auto;padding-right:6px;">
           <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);line-height:1.7;background:var(--bg-card);border:1px solid var(--border);padding:12px 16px;margin-bottom:12px;">
             Skills are reusable capabilities sourced from <span style="color:var(--accent)">skills.sh</span>.
             Assign a skill to an agent to append its instructions to that agent's system prompt.
@@ -6990,7 +6853,7 @@ fullBoot();
           </div>
           <div id="skillsTabList"></div>
         </div>
-        <div id="skillDelegationPanel" style="position:sticky;top:0;background:var(--bg-panel);border:1px solid var(--border-bright);padding:16px;min-height:360px;"></div>
+        <div id="skillDelegationPanel" style="width:420px;max-width:420px;min-width:360px;align-self:flex-start;background:var(--bg-panel);border:1px solid var(--border-bright);padding:14px;max-height:calc(100vh - 180px);overflow-y:auto;flex-shrink:0;"></div>
       </div>
     </div>
 
