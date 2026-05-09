@@ -4258,7 +4258,8 @@ function setActiveCompany(id) {
   list.forEach(function(c){ c.active = c.id === id; });
   saveCompanies(list);
   var co = list.find(function(c){ return c.id === id; });
-  // delegation panel re-reads active company on render
+  _skillDelegationAgentId = null;
+  _skillDelegationCompanyId = co ? (co.id || getCompanyProjectName(co)) : null;
   if (co) _activateCompany(co);
 }
 function _activateCompany(co) {
@@ -4286,7 +4287,10 @@ function _activateCompany(co) {
 
     var activeProjName = manifest.project ? manifest.project.name : co.id;
     RockoCore.setActiveProject(activeProjName);
-    // delegation panel re-reads active company on render
+    _skillDelegationAgentId = null;
+    _skillDelegationCompanyId = co.id || activeProjName;
+    _skillDelegationProjectName = activeProjName;
+    _skillDelegationAgentId = null;
 
     if (typeof ensureCompanyCEO === 'function') {
       ensureCompanyCEO(activeProjName, co.display_name || co.id, co.description || '');
@@ -5235,13 +5239,15 @@ async function deleteCompany(id) {
     if (next._manifest) {
       RockoCore.loadProject(next._manifest);
       RockoCore.setActiveProject(next._manifest.project ? next._manifest.project.name : next.id);
-      // delegation panel re-reads active company on render
+      _skillDelegationAgentId = null;
+      _skillDelegationCompanyId = next.id || getCompanyProjectName(next);
     }
     updateTopbarCompany(next);
   } else {
     localStorage.setItem(COMPANIES_KEY, '[]');
     _companiesCache = [];
-    // delegation panel re-reads active company on render
+    _skillDelegationAgentId = null;
+    _skillDelegationCompanyId = null;
     showOnboarding();
   }
 
@@ -5305,7 +5311,7 @@ function autoMigrateExistingProject() {
 var _skillsLibrary  = [];
 var _skillsTargetId = null;
 var _skillsSource   = 'local';
-// delegation panel reads live from active company — no stale state needed
+// skill delegation reads live from active company on every render
 
 function renderSkillsTab() {
   var el = document.getElementById('skillsTabList');
@@ -5371,95 +5377,80 @@ function renderSkillDelegationPanel() {
   var panel = document.getElementById('skillDelegationPanel');
   if (!panel) return;
 
-  // Always read LIVE from active company — no stale cache
   var proj   = getActiveCompanyProjectName();
   var agents = (RockoCore.getAgents(proj) || []).filter(function(a){
     return a && a.status !== 'fired' && a.enabled !== false;
   });
-  // Fallback: read directly from active company agents array
   if (!agents.length) {
-    var co = getActiveCompany();
+    var co = getActiveCompany ? getActiveCompany() : null;
     if (co && Array.isArray(co.agents)) {
       agents = co.agents.filter(function(a){ return a && a.status !== 'fired' && a.enabled !== false; });
     }
   }
-
   if (!agents.length) {
     panel.innerHTML = '<div style="padding:20px;font-family:var(--mono);font-size:11px;color:var(--text-dim);text-align:center;">No agents in this company.</div>';
     return;
   }
 
-  // Stable color palette per slot — CEO always gold, others fixed
   var PALETTE = ['var(--accent)','var(--green)','var(--purple)','#e07b39','#39b4e0','#e039b4','#b4e039'];
-  var html = '<div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-bottom:10px;">Agent Skill Delegation</div>';
+  var html = '<div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px;">Agent Skill Delegation</div>';
 
   agents.forEach(function(agent, idx) {
-    var aId    = agent.id || agent.agent_id || '';
-    var aName  = agent.display_name || agent.name || aId;
-    var isCEO  = aId.toLowerCase().includes('ceo') || (agent.role||'').toLowerCase() === 'ceo';
-    var color  = isCEO ? 'var(--yellow)' : PALETTE[idx % PALETTE.length];
+    var aId   = agent.id || agent.agent_id || '';
+    var aName = agent.display_name || agent.name || aId;
+    var isCEO = aId.toLowerCase().indexOf('ceo') !== -1 || (agent.role||'').toLowerCase() === 'ceo';
+    var color = isCEO ? 'var(--yellow)' : PALETTE[idx % PALETTE.length];
     var skills = agent.skills || [];
 
-    // Skill chips for this agent
     var chipsHtml = skills.length
       ? skills.map(function(s){
-          var sid  = typeof s === 'string' ? s : (s.id || s.skill_id || s.name || '');
-          var sname= typeof s === 'string' ? s : (s.name || s.skill_name || sid);
-          return '<span style="display:inline-flex;align-items:center;gap:3px;font-family:var(--mono);font-size:9px;padding:1px 6px;background:rgba(71,130,255,.12);border:1px solid rgba(71,130,255,.3);border-radius:2px;margin:1px 2px 1px 0;">'
+          var sid   = typeof s === 'string' ? s : (s.id || s.skill_id || s.name || '');
+          var sname = typeof s === 'string' ? s : (s.name || s.skill_name || sid);
+          return '<span style="display:inline-flex;align-items:center;font-family:var(--mono);font-size:9px;padding:1px 5px;background:rgba(71,130,255,.12);border:1px solid rgba(71,130,255,.3);border-radius:2px;margin:1px 2px 1px 0;">'
             + skillPanelEscape(sname)
-            + '<span style="cursor:pointer;opacity:.7;margin-left:2px;" data-del-skill="' + skillPanelEscape(sid) + '" data-del-agent="' + skillPanelEscape(aId) + '" onclick="delegDelSkill(this)">×</span>'
+            + '<span style="cursor:pointer;margin-left:3px;opacity:.6;" data-ds="' + skillPanelEscape(sid) + '" data-da="' + skillPanelEscape(aId) + '" onclick="delegDel(this)"> x</span>'
             + '</span>';
         }).join('')
       : '<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">No skills assigned</span>';
 
+    var aIdE = skillPanelEscape(aId);
     html +=
-      '<div style="border:1px solid var(--border);border-left:3px solid ' + color + ';border-radius:3px;margin-bottom:7px;padding:7px 9px;background:var(--bg-card);">'
-
-        // Agent name row
-        + '<div style="font-family:var(--cond);font-size:12px;font-weight:700;color:' + color + ';margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + skillPanelEscape(aId) + '">'
+      '<div style="border:1px solid var(--border);border-left:3px solid ' + color + ';border-radius:3px;margin-bottom:6px;padding:6px 8px;">'
+        + '<div style="font-family:var(--cond);font-size:12px;font-weight:700;color:' + color + ';margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + aIdE + '">'
           + skillPanelEscape(aName)
           + (isCEO ? '<span style="font-size:8px;background:var(--yellow);color:#000;padding:0 4px;border-radius:2px;margin-left:5px;vertical-align:middle;">CEO</span>' : '')
         + '</div>'
-
-        // Input + ADD row
-        + '<div style="display:flex;gap:5px;margin-bottom:5px;">'
-          + '<input id="deleg-input-' + skillPanelEscape(aId) + '" class="field-input" style="flex:1;height:24px;font-size:10px;font-family:var(--mono);padding:2px 6px;" placeholder="skill id…" '
-            + 'onkeydown="if(event.key===\'Enter\'){delegAddSkill(\'' + skillPanelEscape(aId) + '\');}" />'
-          + '<button class="btn btn-success" style="height:24px;padding:0 9px;font-size:9px;white-space:nowrap;" '
-            + 'onclick="delegAddSkill(\'' + skillPanelEscape(aId) + '\')">ADD</button>'
+        + '<div style="display:flex;gap:4px;margin-bottom:4px;">'
+        + '<input id="di-' + aIdE + '" class="field-input" data-aid="' + aIdE + '" style="flex:1;height:22px;font-size:10px;font-family:var(--mono);padding:1px 6px;" placeholder="skill id…" onkeydown="if(event.key===\'Enter\'){delegAdd(this.getAttribute(\'data-aid\'));}" />'
+          + '<button class="btn btn-success" data-aid="' + aIdE + '" style="height:22px;padding:0 8px;font-size:9px;white-space:nowrap;" onclick="delegAdd(this.getAttribute(\'data-aid\'))">ADD</button>'
         + '</div>'
-
-        // Skills row
-        + '<div id="deleg-skills-' + skillPanelEscape(aId) + '" style="display:flex;flex-wrap:wrap;align-items:center;">'
-          + chipsHtml
-        + '</div>'
-
+        + '<div style="display:flex;flex-wrap:wrap;align-items:center;">' + chipsHtml + '</div>'
       + '</div>';
   });
 
   panel.innerHTML = html;
 }
 
-function delegAddSkill(agentId) {
-  var input = document.getElementById('deleg-input-' + agentId);
+function delegAdd(agentId) {
+  var input = document.getElementById('di-' + agentId);
   if (!input) return;
   var skillId = input.value.trim();
   if (!skillId) { toastErr('Enter a skill ID'); return; }
-  var skillData = _skillsLibrary.find(function(s){ return s.id === skillId || s.slug === skillId; })
-                  || {id: skillId, name: skillId, source: 'manual'};
+  var skillData = (_skillsLibrary || []).find(function(s){ return s.id === skillId || s.slug === skillId; }) || {id:skillId,name:skillId,source:'manual'};
   _skillsTargetId = agentId;
   applySkillToAgent(skillId, skillData);
-  bridgePost('/skills/assign', {id: skillId, agent_id: agentId}).catch(function(){});
+  bridgePost('/skills/assign', {id:skillId, agent_id:agentId}).catch(function(){});
   input.value = '';
   renderSkillDelegationPanel();
   refreshAll();
 }
 
-function delegDelSkill(el) {
-  var skillId  = el.getAttribute('data-del-skill');
-  var agentId  = el.getAttribute('data-del-agent');
+function delegDel(el) {
+  var skillId = el.getAttribute('data-ds');
+  var agentId = el.getAttribute('data-da');
   if (!skillId || !agentId) return;
-  if (!confirm('Remove skill from agent?\n\n' + skillId)) return;
+  if (!confirm('Remove skill?\n\n' + skillId)) return;
+
   _skillsTargetId = agentId;
   removeSkillFromAgent(skillId);
   renderSkillDelegationPanel();
