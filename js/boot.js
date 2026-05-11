@@ -10,15 +10,43 @@ async function fullBoot() {
   bootPGlite().then(function(ok) {
     if (ok) RockoCore.log('info', 'PGlite: storage active');
   });
-  // Always clear session on fresh boot — login is required every time the app starts
+
+  // ── 1. Hard-reset session — login required on every boot ────
   setSessionToken(null);
   _sessionToken = null;
   _currentUser  = null;
+
+  // ── 2. Force app to dashboard view so the correct screen is
+  //       behind the login overlay regardless of browser restore ─
+  document.querySelectorAll('.view').forEach(function(x){ x.classList.remove('active'); });
+  var _dashEl = document.getElementById('view-dashboard');
+  if (_dashEl) _dashEl.classList.add('active');
+  document.querySelectorAll('.nav-tab').forEach(function(t){
+    t.classList.toggle('active', t.textContent.toLowerCase().trim() === 'dashboard');
+  });
+
+  // ── 3. Show login overlay on top of everything ───────────────
   showLoginOverlay();
+
   startPolling();
   initProviderSelection();
   init();
 }
+
+// Handle browser back-forward cache (bfcache) restores — when a user navigates
+// back/forward the page is rehydrated from cache without re-running scripts.
+// Force login again so the user can never skip auth via browser history.
+window.addEventListener('pageshow', function(event) {
+  if (event.persisted) {
+    setSessionToken(null);
+    _sessionToken = null;
+    _currentUser  = null;
+    document.querySelectorAll('.view').forEach(function(x){ x.classList.remove('active'); });
+    var _d = document.getElementById('view-dashboard');
+    if (_d) _d.classList.add('active');
+    showLoginOverlay();
+  }
+});
 
 
 async function testProvider(providerId) {
