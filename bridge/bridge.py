@@ -415,6 +415,14 @@ def serve_icon512():
 try:
     app.mount("/assets", StaticFiles(directory=str(ROCKO_ROOT)), name="assets")
 except Exception: pass
+try:
+    _css = ROCKO_ROOT / "css"
+    if _css.exists(): app.mount("/css", StaticFiles(directory=str(_css)), name="css")
+except Exception: pass
+try:
+    _js = ROCKO_ROOT / "js"
+    if _js.exists(): app.mount("/js", StaticFiles(directory=str(_js)), name="js")
+except Exception: pass
 
 # -- Core routes ---------------------------------------------------------------
 @app.get("/health")
