@@ -964,6 +964,7 @@ body { display:flex; flex-direction:row; overflow:hidden; }
           </div>
           <div class="field-group">
             <div class="field-label">Connections</div>
+            <div id="editorConnections" style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px;"></div>
             <div id="agentConnectionsPanel" style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
               <div id="telegramConnRow" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;">
                 <div style="display:flex;align-items:center;gap:8px;">
@@ -988,9 +989,9 @@ body { display:flex; flex-direction:row; overflow:hidden; }
             </div>
           </div>
           <div class="field-group">
-            <div class="field-label">Skills</div>
-            <div id="agentSkillsDisplay" style="display:flex;flex-wrap:wrap;gap:6px;min-height:28px;padding:6px 0;">
-              <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">No skills assigned</span>
+            <div class="field-label">Skills / Tags</div>
+            <input class="field-input" id="editorTags" placeholder="e.g. trading, research, analyst (comma-separated)" style="margin-bottom:6px;" />
+            <div id="agentSkillsDisplay" style="display:flex;flex-wrap:wrap;gap:6px;min-height:18px;padding:2px 0;">
             </div>
           </div>
         </div>
@@ -2519,29 +2520,54 @@ function updateStats(){
   }
 }
 
+function _agentColor(id){
+  // Deterministic unique color per agent from their ID string
+  var palette=['#4782ff','#06b6d4','#10b981','#f59e0b','#a78bfa','#f43f5e','#fb923c','#34d399','#38bdf8','#c084fc','#fbbf24','#60a5fa'];
+  var hash=0; for(var i=0;i<(id||'').length;i++){hash=(hash*31+id.charCodeAt(i))>>>0;}
+  return palette[hash%palette.length];
+}
 function renderDashboard(){
   const proj=RockoCore.getActiveProject();
   const agents=RockoCore.getAgents(proj).sort((a,b)=>String(a.pipeline_step).localeCompare(String(b.pipeline_step)));
-  const rC=r=>({ceo:'var(--yellow)',analyst:'var(--accent)',engine:'var(--green)',custom:'var(--purple)'})[r]||'var(--text-dim)';
-  const rE=r=>({ceo:'★',analyst:'◎',engine:'⚙',custom:'✦'})[r]||'?';
-  const sC=s=>({active:'var(--green)',idle:'var(--text-dim)',paused:'var(--yellow)',error:'var(--red)'})[s]||'var(--text-dim)';
-  document.getElementById('agentCardsGrid').innerHTML=agents.map(a=>`
-    <div class="agent-card ${a.role==='ceo'?'ceo':''} fade-in" onclick="openAgent('${a.id}')">
-      <div class="agent-card-header">
-        <div class="card-icon" style="border-color:${rC(a.role)};color:${rC(a.role)}">${rE(a.role)}</div>
-        <div style="flex:1"><div class="agent-card-name">${a.name}</div>
-          <div style="font-family:var(--mono);font-size:9px;color:${sC(a.status)};letter-spacing:1px">● ${a.status.toUpperCase()}</div>
-        </div>
-        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${a.type?.toUpperCase()||'PROMPT'}</div>
-      </div>
-      <div class="agent-card-desc">${a.description}</div>
-      <div class="agent-card-meta"><span>${a.model}</span><span style="color:var(--border)">|</span><span>${a.provider}</span></div>
-      <div class="card-actions" onclick="event.stopPropagation()">
-        <button class="card-btn run" onclick="runAgentCard('${a.id}')">${a.status==='active'?'⏸ Pause':'▶ Run'}</button>
-        <button class="card-btn" onclick="openAgent('${a.id}')">✎ Edit</button>
-        <button class="card-btn del" onclick="confirmDelete('${a.id}')">✕</button>
-      </div>
-    </div>`).join('');
+  // Role icons cover all known and unknown roles gracefully
+  const rE=r=>{
+    const rl=(r||'').toLowerCase();
+    if(rl==='ceo'||rl==='director')return'★';
+    if(rl==='analyst'||rl==='research')return'◎';
+    if(rl==='engine'||rl==='executor')return'⚙';
+    if(rl==='custom')return'✦';
+    if(rl==='agent')return'◆';
+    if(rl==='support')return'♦';
+    if(rl==='writer'||rl==='content')return'✏';
+    if(rl==='risk')return'⚑';
+    if(rl==='trader'||rl==='trading')return'◈';
+    // First letter of role as fallback — never show ?
+    return (r||'?').charAt(0).toUpperCase();
+  };
+  const sC=s=>({active:'var(--green)',idle:'var(--text-dim)',paused:'var(--yellow)',error:'var(--red)',fired:'var(--red)'})[s]||'var(--text-dim)';
+  document.getElementById('agentCardsGrid').innerHTML=agents.map(function(a){
+    var col=_agentColor(a.id);
+    var role=a.role||'agent';
+    var status=a.status||'idle';
+    var isCeo=role==='ceo';
+    return '<div class="agent-card '+(isCeo?'ceo':'')+' fade-in" style="border-top:2px solid '+col+';cursor:pointer" onclick="openAgent(\'' +a.id+ '\')">'
+      +'<div class="agent-card-header">'
+      +'<div class="card-icon" style="border-color:'+col+';color:'+col+';background:rgba(0,0,0,.18);font-size:15px;font-weight:700;">'+rE(role)+'</div>'
+      +'<div style="flex:1">'
+      +'<div class="agent-card-name">'+a.name+'</div>'
+      +'<div style="font-family:var(--mono);font-size:9px;color:'+sC(status)+';letter-spacing:1px">&#9679; '+status.toUpperCase()+'</div>'
+      +'</div>'
+      +'<div style="font-family:var(--mono);font-size:9px;padding:2px 6px;border-radius:3px;background:'+col+'22;color:'+col+';border:1px solid '+col+'44;">'+role.toUpperCase()+'</div>'
+      +'</div>'
+      +'<div class="agent-card-desc">'+(a.description||'No description.')+'</div>'
+      +'<div class="agent-card-meta"><span>'+(a.model||'&mdash;')+'</span><span style="color:var(--border)">|</span><span>'+(a.provider||'&mdash;')+'</span></div>'
+      +'<div class="card-actions" onclick="event.stopPropagation()">'
+      +'<button class="card-btn run" style="border-color:'+col+'66;color:'+col+'" onclick="runAgentCard(\'' +a.id+ '\')">'+(status==='active'?'&#9208; Pause':'&#9654; Run')+'</button>'
+      +'<button class="card-btn" onclick="openAgent(\'' +a.id+ '\')">&#9998; Edit</button>'
+      +'<button class="card-btn del" onclick="confirmDelete(\'' +a.id+ '\')">&#x2715;</button>'
+      +'</div>'
+      +'</div>';
+  }).join('');
 }
 
 // ─────────────────────────────────────────────────────────
@@ -2752,33 +2778,40 @@ function doReject(){if(!confirm('Reject this pipeline step? The pipeline will ha
 // ─────────────────────────────────────────────────────────
 // AGENT EDITOR
 // ─────────────────────────────────────────────────────────
+function _setVal(id,v){var el=document.getElementById(id);if(el&&'value' in el)el.value=v||'';else if(el)el.textContent=v||'';}
+function _setText(id,v){var el=document.getElementById(id);if(el)el.textContent=v||'';}
 function openAgent(id){
   const a=RockoCore.getAgent(id); if(!a)return;
-  currentAgentId=id; editorStatus=a.status; editorConns=[...(a.connections||[])];
+  currentAgentId=id; editorStatus=a.status||'idle'; editorConns=[...(a.connections||[])];
   const manifest=RockoCore.getProject(a.project);
   const _co = typeof getActiveCompany === 'function' ? getActiveCompany() : null;
-  document.getElementById('editorName').value=a.name;
-  document.getElementById('editorRole').value=a.role;
-  document.getElementById('editorModel').value=(_co&&_co.default_model)||manifest?.model?.default_model||a.model||'';
-  document.getElementById('editorModelOverride').value=a.model_override||'';
-  document.getElementById('editorDesc').value=a.description;
-  document.getElementById('editorInstructions').value=a.instructions;
-  document.getElementById('editorStep').value=a.pipeline_step||'';
-  document.getElementById('editorScriptPath').value=a.local_code?.script_path||'';
-  document.getElementById('editorEntryPoint').value=a.local_code?.entry||a.local_code?.entry_point||'';
-  document.getElementById('editorTags').value=(a.skills||a.tags||[]).join(', ');
-  document.getElementById('metaId').textContent=a.id;
-  document.getElementById('metaProject').textContent=a.project;
-  document.getElementById('metaProvider').textContent=a.provider_key||a.provider||'—';
-  document.getElementById('metaType').textContent=a.type||'prompt';
+  // Navigate first so elements are guaranteed visible/rendered
+  setTab('agents',null);
+  _setVal('editorName',a.name);
+  _setVal('editorRole',a.role);
+  _setVal('editorModel',(_co&&_co.default_model)||manifest?.model?.default_model||a.model||'');
+  _setVal('editorModelOverride',a.model_override||'');
+  _setVal('editorDesc',a.description);
+  _setVal('editorInstructions',a.instructions||a._instructions||'');
+  _setVal('editorStep',a.pipeline_step||'');
+  _setVal('editorScriptPath',a.local_code?.script_path||'');
+  _setVal('editorEntryPoint',a.local_code?.entry||a.local_code?.entry_point||'');
+  _setVal('editorTags',(a.skills||a.tags||[]).join(', '));
+  _setText('metaId',a.id);
+  _setText('metaProject',a.project);
+  _setText('metaProvider',a.provider_key||a.provider||'—');
+  _setText('metaType',a.type||'prompt');
   const tKeys=Object.keys(a.tools||{});
-  document.getElementById('toolsList').innerHTML=tKeys.length?tKeys.map(k=>'<span class="perm-badge '+(a.tools[k].enabled?'perm-ok':'perm-blocked')+'">'+k+'</span>').join(''):'<span style="color:var(--text-dim)">none</span>';
+  var tl=document.getElementById('toolsList');
+  if(tl)tl.innerHTML=tKeys.length?tKeys.map(k=>'<span class="perm-badge '+(a.tools[k].enabled?'perm-ok':'perm-blocked')+'">'+k+'</span>').join(''):'<span style="color:var(--text-dim)">none</span>';
   const aKeys=Object.keys(a.apis||{});
-  document.getElementById('apisList').innerHTML=aKeys.length?aKeys.map(k=>'<span class="perm-badge perm-ok">'+k+'</span>').join(''):'<span style="color:var(--text-dim)">none</span>';
+  var al=document.getElementById('apisList');
+  if(al)al.innerHTML=aKeys.length?aKeys.map(k=>'<span class="perm-badge perm-ok">'+k+'</span>').join(''):'<span style="color:var(--text-dim)">none</span>';
   document.querySelectorAll('.status-btn').forEach(b=>b.classList.toggle('sel',b.dataset.val===a.status));
   renderConnChips(editorConns);
-  document.getElementById('saveHint').textContent='Saved';document.getElementById('saveHint').style.color='';
-  setTab('agents',null);renderSidebar();
+  var sh=document.getElementById('saveHint');
+  if(sh){sh.textContent='Saved';sh.style.color='';}
+  renderSidebar();
 }
 function renderConnChips(conns){
   const area=document.getElementById('editorConnections');
@@ -2806,17 +2839,19 @@ function addConn(){
 }
 function setEditorStatus(val,btn){editorStatus=val;document.querySelectorAll('.status-btn').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');markUnsaved();}
 function markUnsaved(){document.getElementById('saveHint').textContent='● Unsaved';document.getElementById('saveHint').style.color='var(--yellow)';}
+function _gEl(id){return document.getElementById(id);}
 function saveAgent(){
   if(!currentAgentId)return;
 
-  const h=document.getElementById('saveHint');
-  const pipelineStep=document.getElementById('editorStep').value.trim();
-  const instructions=document.getElementById('editorInstructions').value;
+  const h=_gEl('saveHint');
+  const pipelineStep=(_gEl('editorStep')||{value:''}).value.trim();
+  const instructions=(_gEl('editorInstructions')||{value:''}).value;
+  const tagsRaw=(_gEl('editorTags')||{value:''}).value;
+  const tagList=tagsRaw.split(',').map(s=>s.trim()).filter(Boolean);
 
-  // FIX 1: Build updated local_code from editor fields.
-  // Previously these fields were read into the form but never written back on save.
-  const scriptPath=document.getElementById('editorScriptPath').value.trim();
-  const entryPoint=document.getElementById('editorEntryPoint').value.trim();
+  // Build updated local_code from editor fields (was entirely missing before)
+  const scriptPath=(_gEl('editorScriptPath')||{value:''}).value.trim();
+  const entryPoint=(_gEl('editorEntryPoint')||{value:''}).value.trim();
   const existingAgent=RockoCore.getAgent(currentAgentId);
   const existingLc=existingAgent&&existingAgent.local_code?existingAgent.local_code:{};
   const updatedLc=(scriptPath||entryPoint)
@@ -2827,28 +2862,25 @@ function saveAgent(){
        entry_point:entryPoint||existingLc.entry_point||null}
     :(existingAgent?existingAgent.local_code:null);
 
-  const tagList=document.getElementById('editorTags').value.split(',').map(s=>s.trim()).filter(Boolean);
-
   RockoCore.updateAgent(currentAgentId,{
-    name:document.getElementById('editorName').value,
-    role:document.getElementById('editorRole').value,
-    model_override:document.getElementById('editorModelOverride').value.trim()||null,
-    description:document.getElementById('editorDesc').value,
+    name:(_gEl('editorName')||{value:''}).value,
+    role:(_gEl('editorRole')||{value:''}).value,
+    model_override:(_gEl('editorModelOverride')||{value:''}).value.trim()||null,
+    description:(_gEl('editorDesc')||{value:''}).value,
     instructions:instructions,
-    _instructions:instructions,   // FIX 2: keep manifest shadow in sync so export/rebuild sees fresh text
+    _instructions:instructions,
     pipeline_step:pipelineStep,
     status:editorStatus,
     connections:editorConns,
     outputs_to:editorConns,
-    local_code:updatedLc,         // FIX 1: was entirely missing from this call
+    local_code:updatedLc,
     skills:tagList,
     tags:tagList,
     apis:[],
     project_tools:['filesystem','http']
   });
 
-  // FIX 3: Patch the manifest's agent def array so instruction_file path and
-  // local_code are respected on rebuild/export (manifest defs are separate from _agents).
+  // Patch manifest agent def so export/rebuild sees fresh instructions + local_code
   const proj=RockoCore.getActiveProject();
   const manifest=RockoCore.getProject(proj);
   if(manifest&&Array.isArray(manifest.agents)){
@@ -2858,19 +2890,15 @@ function saveAgent(){
       if(scriptPath||entryPoint) def.local_code=updatedLc;
     }
   }
-
-  // Sync outputs_to into the manifest pipeline step so DAG renderer stays current
+  // Sync pipeline DAG
   if(manifest&&manifest.pipeline&&Array.isArray(manifest.pipeline.execution_order)){
     const step=manifest.pipeline.execution_order.find(s=>s.agent_id===currentAgentId);
-    if(step){
-      step.outputs_to=editorConns;
-      if(pipelineStep) step.step_id=pipelineStep;
-    }
+    if(step){step.outputs_to=editorConns;if(pipelineStep)step.step_id=pipelineStep;}
   }
 
-  if(h){ h.textContent='✓ Saved'; h.style.color='var(--green)'; }
+  if(h){h.textContent='✓ Saved';h.style.color='var(--green)';}
   refreshAll();
-  setTimeout(()=>{ if(h){ h.textContent='All saved'; h.style.color=''; } },2000);
+  setTimeout(()=>{if(h){h.textContent='All saved';h.style.color='';}},2000);
 }
 function deleteCurrentAgent(){
   const a = RockoCore.getAgent(currentAgentId);
