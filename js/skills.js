@@ -1,7 +1,4 @@
-/* ============================================================
-   SKILLS & HIRE — skills library, delegation, hire/fire,
-                   bootCompanyLayer, openAgent override
-   ============================================================ */
+/* SKILLS & HIRE — skills library, delegation, hire/fire, openAgent override */
 
 function renderSkillsTab() {
   var el = document.getElementById('skillsTabList');
@@ -459,7 +456,3 @@ async function bootCompanyLayer() {
 // Session token stored in localStorage.
 // Bridge validates token and scopes companies to logged-in user.
 // ═══════════════════════════════════════════════════════════════
-var SESSION_KEY   = 'rockoagents_session_v1';
-var _currentUser  = null;
-var _sessionToken = null;
-

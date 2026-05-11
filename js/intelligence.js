@@ -1,8 +1,6 @@
-/* ============================================================
-   INTELLIGENCE — settings, bridge, workers, schedules,
-                  orchestration, runtimes
-   ============================================================ */
+/* INTELLIGENCE — settings, bridge, workers, schedules, orchestration, runtimes */
 
+function settingsMarkDirty() {
   var btn = document.getElementById('saveSettingsBtn');
   if (btn) { btn.textContent = '💾 Save Settings *'; btn.style.background = 'var(--yellow)'; btn.style.color = '#000'; }
 }
@@ -798,9 +796,3 @@ setInterval(function() {
 // COMPANY LAYER
 // Company = user-facing workspace. Project = technical config.
 // ═══════════════════════════════════════════════════════════════
-var COMPANIES_KEY = 'rockoagents_companies_v1';
-var DELETED_COMPANIES_KEY = 'rockoagents_deleted_companies_v1';
-var _currentCompanyLogo = null;
-var _companyModalLogo   = null;
-
-function getCompanies() {

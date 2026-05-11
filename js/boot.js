@@ -1,7 +1,25 @@
-/* ============================================================
-   BOOT — startup, provider/model selection, team build,
-          DOMContentLoaded entry point
-   ============================================================ */
+/* BOOT — startup, providers, models, team build, DOMContentLoaded */
+
+function startPolling() {
+  // Compatibility shim: older boot flow calls startPolling(), while this file now
+  // performs bridge polling inside init(). Keep this no-op so boot never halts.
+  return true;
+}
+
+async function fullBoot() {
+  bootPGlite().then(function(ok) {
+    if (ok) RockoCore.log('info', 'PGlite: storage active');
+  });
+  // Always clear session on fresh boot — login is required every time the app starts
+  setSessionToken(null);
+  _sessionToken = null;
+  _currentUser  = null;
+  showLoginOverlay();
+  startPolling();
+  initProviderSelection();
+  init();
+}
+
 
 async function testProvider(providerId) {
   showLoading('Testing ' + providerId + ' connection...');
@@ -580,7 +598,7 @@ fullBoot();
 
 
 
+
 document.addEventListener('DOMContentLoaded', function(){
   if (typeof restoreRockoStateOnBoot === 'function') restoreRockoStateOnBoot();
 });
-

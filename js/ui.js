@@ -1,7 +1,6 @@
-/* ============================================================
-   UI — init, navigation, dashboard, sidebar, stats
-   ============================================================ */
+/* UI — init, navigation, dashboard, sidebar, stats */
 
+function init() {
   RockoCore.onLog(e=>appendLog(e));
   RockoCore.onRender('projectLoaded',        ()=>refreshAll());
   RockoCore.onRender('agentStatusChanged',   ()=>refreshAll());
@@ -201,4 +200,3 @@ function renderDashboard(){
 // ─────────────────────────────────────────────────────────
 // PIPELINE
 // ─────────────────────────────────────────────────────────
-function renderPipeline(){

@@ -1,7 +1,6 @@
-/* ============================================================
-   TASKS — task system, run history, agent sync
-   ============================================================ */
+/* TASKS — task system, run history, agent sync */
 
+function setTaskFilter(val,btn){
   _taskFilterVal=val;
   document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
@@ -251,4 +250,3 @@ function createMissingCEO() {
 }
 
 // ── Settings form ─────────────────────────────────────────────
-function settingsMarkDirty() {

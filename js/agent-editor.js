@@ -1,15 +1,20 @@
-/* ============================================================
-   AGENT EDITOR — open, save, delete, run, create
-   ============================================================ */
+/* AGENT EDITOR — open, save, delete, run, create */
 
+function _setVal(id,v){var el=document.getElementById(id);if(el&&'value' in el)el.value=v||'';else if(el)el.textContent=v||'';}
 function _setText(id,v){var el=document.getElementById(id);if(el)el.textContent=v||'';}
 function openAgent(id){
   const a=RockoCore.getAgent(id); if(!a)return;
   currentAgentId=id; editorStatus=a.status||'idle'; editorConns=[...(a.connections||[])];
   const manifest=RockoCore.getProject(a.project);
   const _co = typeof getActiveCompany === 'function' ? getActiveCompany() : null;
-  // Navigate first so elements are guaranteed visible/rendered
-  setTab('agents',null);
+  // Direct navigation — bypasses company gate which blocks when no company is
+  // registered (app booted from localStorage without activation flow)
+  document.querySelectorAll('.view').forEach(function(x){x.classList.remove('active');});
+  var _agView = document.getElementById('view-agents');
+  if(_agView) _agView.classList.add('active');
+  document.querySelectorAll('.nav-tab').forEach(function(t){
+    t.classList.toggle('active', t.textContent.toLowerCase().trim()==='agents');
+  });
   _setVal('editorName',a.name);
   _setVal('editorRole',a.role);
   _setVal('editorModel',(_co&&_co.default_model)||manifest?.model?.default_model||a.model||'');
@@ -118,6 +123,8 @@ function saveAgent(){
     const step=manifest.pipeline.execution_order.find(s=>s.agent_id===currentAgentId);
     if(step){step.outputs_to=editorConns;if(pipelineStep)step.step_id=pipelineStep;}
   }
+  // Second saveState — updateAgent saved BEFORE def._instructions was patched above
+  RockoCore.saveState();
 
   if(h){h.textContent='✓ Saved';h.style.color='var(--green)';}
   refreshAll();
@@ -417,4 +424,3 @@ function createNewAgent(){
 // ─────────────────────────────────────────────────────────
 // TASK SYSTEM
 // ─────────────────────────────────────────────────────────
-function setTaskFilter(val,btn){

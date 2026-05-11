@@ -1,7 +1,11 @@
-/* ============================================================
-   COMPANY — companies, onboarding, projects, templates
-   ============================================================ */
+/* COMPANY — companies, onboarding, projects, templates */
 
+var COMPANIES_KEY = 'rockoagents_companies_v1';
+var DELETED_COMPANIES_KEY = 'rockoagents_deleted_companies_v1';
+var _currentCompanyLogo = null;
+var _companyModalLogo   = null;
+
+function getCompanies() {
   try { return JSON.parse(localStorage.getItem(COMPANIES_KEY) || '[]'); }
   catch { return []; }
 }
@@ -110,7 +114,21 @@ function _activateCompany(co) {
   renderCompanyRail();
   updateTopbarCompany(co);
   hideOnboarding();
+  // Reset agent editor — old agent belongs to previous company
+  var _wasOnAgentEditor = (function(){
+    var v = document.getElementById('view-agents');
+    return v && v.classList.contains('active');
+  })();
+  if(typeof currentAgentId !== 'undefined') currentAgentId = null;
   refreshAll();
+  if(_wasOnAgentEditor){
+    document.querySelectorAll('.view').forEach(function(x){x.classList.remove('active');});
+    var _d = document.getElementById('view-dashboard');
+    if(_d) _d.classList.add('active');
+    document.querySelectorAll('.nav-tab').forEach(function(t){
+      t.classList.toggle('active', t.textContent.toLowerCase().trim()==='dashboard');
+    });
+  }
   setTimeout(function(){ refreshAll(); }, 250);
   toastOk('Switched to ' + co.display_name);
 }
@@ -1119,4 +1137,3 @@ var _skillsLibrary  = [];
 var _skillsTargetId = null;
 var _skillsSource   = 'local';
 // skill delegation reads live from active company on every render
-

@@ -1,7 +1,4 @@
-/* ============================================================
-   ROCKO CORE PLATFORM v4.0
-   RockoCore — agent runtime, state, events
-   ============================================================ */
+/* RockoCore Platform v4.0 — agent runtime, state, events */
 
 /**
  * RockoAgents Core Platform v4.0
@@ -767,3 +764,6 @@ const RockoCore = (() => {
 if(typeof module!=='undefined')module.exports=RockoCore;
 
 
+// ─────────────────────────────────────────────────────────
+// APP CONFIG
+// ─────────────────────────────────────────────────────────

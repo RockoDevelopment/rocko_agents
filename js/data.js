@@ -1,11 +1,5 @@
-/* ============================================================
-   DATA — APP_CONFIG, BUNDLED_PROJECTS, AGENT_TEMPLATES
-   Global state variables
-   ============================================================ */
+/* APP_CONFIG, BUNDLED_PROJECTS, AGENT_TEMPLATES, global state */
 
-// ─────────────────────────────────────────────────────────
-// APP CONFIG
-// ─────────────────────────────────────────────────────────
 const APP_CONFIG = {
   auto_load_default_project: false, default_project: null,
   bridge_url: "http://127.0.0.1:8787", bridge_poll_interval_ms: 8000, max_log_lines: 150
@@ -26,4 +20,3 @@ let qaPage=0, qaAgents=[], _taskFilterVal='', selectedTaskId=null, selectedRunId
 // ─────────────────────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────────────────────
-function init() {

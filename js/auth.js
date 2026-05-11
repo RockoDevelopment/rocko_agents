@@ -1,6 +1,8 @@
-/* ============================================================
-   AUTH — session, login, signup, auth helpers
-   ============================================================ */
+/* AUTH — session, login, signup, auth helpers */
+
+var SESSION_KEY   = 'rockoagents_session_v1';
+var _currentUser  = null;
+var _sessionToken = null;
 
 function getSessionToken() {
   return localStorage.getItem(SESSION_KEY) || null;
@@ -202,5 +204,3 @@ async function bootAuth() {
 var _pgdb   = null;
 var _pgReady = false;
 var _pgQueue = [];   // queued writes while initialising
-
-async function initPGlite() {

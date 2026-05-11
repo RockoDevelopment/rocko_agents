@@ -1,7 +1,6 @@
-/* ============================================================
-   PERSISTENCE — PGlite, pgWrite/pgRead, localStorage patch
-   ============================================================ */
+/* PERSISTENCE — PGlite, pgWrite/pgRead, saveState patch */
 
+async function initPGlite() {
   try {
     var mod = await import('https://cdn.jsdelivr.net/npm/@electric-sql/pglite/dist/index.js');
     var PGlite = mod.PGlite || mod.default;
@@ -293,25 +292,3 @@ function patchRockoCorePersistence() {
     RockoCore.saveState._patched = true;
   }
 }
-
-function startPolling() {
-  // Compatibility shim: older boot flow calls startPolling(), while this file now
-  // performs bridge polling inside init(). Keep this no-op so boot never halts.
-  return true;
-}
-
-async function fullBoot() {
-  bootPGlite().then(function(ok) {
-    if (ok) RockoCore.log('info', 'PGlite: storage active');
-  });
-  // Always clear session on fresh boot — login is required every time the app starts
-  setSessionToken(null);
-  _sessionToken = null;
-  _currentUser  = null;
-  showLoginOverlay();
-  startPolling();
-  initProviderSelection();
-  init();
-}
-
-

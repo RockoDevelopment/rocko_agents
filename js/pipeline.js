@@ -1,7 +1,6 @@
-/* ============================================================
-   PIPELINE — render, run, approval gate
-   ============================================================ */
+/* PIPELINE — render, run, approval gate */
 
+function renderPipeline(){
   const proj=RockoCore.getActiveProject(),manifest=RockoCore.getProject(proj);
   const runCtx=RockoCore.getRunContext();
   document.getElementById('pipelineProjectLabel').textContent=manifest?.project?.display_name||proj||'—';
@@ -206,4 +205,3 @@ function doReject(){if(!confirm('Reject this pipeline step? The pipeline will ha
 // ─────────────────────────────────────────────────────────
 // AGENT EDITOR
 // ─────────────────────────────────────────────────────────
-function _setVal(id,v){var el=document.getElementById(id);if(el&&'value' in el)el.value=v||'';else if(el)el.textContent=v||'';}
