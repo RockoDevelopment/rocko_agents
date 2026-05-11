@@ -2811,32 +2811,55 @@ function saveAgent(){
 
   const h=document.getElementById('saveHint');
   const pipelineStep=document.getElementById('editorStep').value.trim();
+  const instructions=document.getElementById('editorInstructions').value;
+
+  // FIX 1: Build updated local_code from editor fields.
+  // Previously these fields were read into the form but never written back on save.
+  const scriptPath=document.getElementById('editorScriptPath').value.trim();
+  const entryPoint=document.getElementById('editorEntryPoint').value.trim();
+  const existingAgent=RockoCore.getAgent(currentAgentId);
+  const existingLc=existingAgent&&existingAgent.local_code?existingAgent.local_code:{};
+  const updatedLc=(scriptPath||entryPoint)
+    ?{...existingLc,
+       type:existingLc.type||'python_module',
+       script_path:scriptPath||existingLc.script_path||null,
+       entry:entryPoint||existingLc.entry||null,
+       entry_point:entryPoint||existingLc.entry_point||null}
+    :(existingAgent?existingAgent.local_code:null);
+
+  const tagList=document.getElementById('editorTags').value.split(',').map(s=>s.trim()).filter(Boolean);
 
   RockoCore.updateAgent(currentAgentId,{
     name:document.getElementById('editorName').value,
     role:document.getElementById('editorRole').value,
     model_override:document.getElementById('editorModelOverride').value.trim()||null,
     description:document.getElementById('editorDesc').value,
-    instructions:document.getElementById('editorInstructions').value,
+    instructions:instructions,
+    _instructions:instructions,   // FIX 2: keep manifest shadow in sync so export/rebuild sees fresh text
     pipeline_step:pipelineStep,
     status:editorStatus,
     connections:editorConns,
     outputs_to:editorConns,
-    skills:document.getElementById('editorTags').value
-      .split(',')
-      .map(s=>s.trim())
-      .filter(Boolean),
-    tags:document.getElementById('editorTags').value
-      .split(',')
-      .map(s=>s.trim())
-      .filter(Boolean),
+    local_code:updatedLc,         // FIX 1: was entirely missing from this call
+    skills:tagList,
+    tags:tagList,
     apis:[],
     project_tools:['filesystem','http']
   });
 
-  // Sync outputs_to into the manifest pipeline step so DAG renderer stays current
+  // FIX 3: Patch the manifest's agent def array so instruction_file path and
+  // local_code are respected on rebuild/export (manifest defs are separate from _agents).
   const proj=RockoCore.getActiveProject();
   const manifest=RockoCore.getProject(proj);
+  if(manifest&&Array.isArray(manifest.agents)){
+    const def=manifest.agents.find(d=>d&&d.id===currentAgentId);
+    if(def){
+      def._instructions=instructions;
+      if(scriptPath||entryPoint) def.local_code=updatedLc;
+    }
+  }
+
+  // Sync outputs_to into the manifest pipeline step so DAG renderer stays current
   if(manifest&&manifest.pipeline&&Array.isArray(manifest.pipeline.execution_order)){
     const step=manifest.pipeline.execution_order.find(s=>s.agent_id===currentAgentId);
     if(step){
