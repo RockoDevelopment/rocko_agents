@@ -819,6 +819,19 @@
       <div class="field-group"><div class="field-label">Input Context (JSON, optional)</div>
         <textarea class="field-input" id="taskInput" style="min-height:60px;font-family:var(--mono);font-size:11px;resize:vertical;" placeholder='{"symbol": "SOL", "timeframe": "4h"}'></textarea>
       </div>
+      <div class="field-group">
+        <div class="field-label" style="display:flex;align-items:center;gap:8px;">
+          /goal Done Criteria
+          <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);font-weight:400;">optional — one criterion per line</span>
+        </div>
+        <textarea class="field-input" id="taskDoneCriteria"
+          style="min-height:80px;font-family:var(--mono);font-size:11px;resize:vertical;"
+          placeholder="- Tests pass&#10;- Build passes&#10;- No TODO comments remain&#10;- Output matches spec"></textarea>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:4px;">
+          After the task runs, the agent verifies each criterion against its output.
+          Uses your configured provider — no extra setup needed.
+        </div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('createTaskModal')">Cancel</button>
