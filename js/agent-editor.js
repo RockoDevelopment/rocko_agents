@@ -77,7 +77,7 @@ function saveAgent(){
   const tagsRaw=(_gEl('editorTags')||{value:''}).value;
   const tagList=tagsRaw.split(',').map(s=>s.trim()).filter(Boolean);
 
-  // Build updated local_code from editor fields (was entirely missing before)
+  // Build updated local_code from editor fields
   const scriptPath=(_gEl('editorScriptPath')||{value:''}).value.trim();
   const entryPoint=(_gEl('editorEntryPoint')||{value:''}).value.trim();
   const existingAgent=RockoCore.getAgent(currentAgentId);
@@ -90,11 +90,17 @@ function saveAgent(){
        entry_point:entryPoint||existingLc.entry_point||null}
     :(existingAgent?existingAgent.local_code:null);
 
+  const updatedName=(_gEl('editorName')||{value:''}).value;
+  const updatedRole=(_gEl('editorRole')||{value:''}).value;
+  const updatedDesc=(_gEl('editorDesc')||{value:''}).value;
+  const updatedModelOverride=(_gEl('editorModelOverride')||{value:''}).value.trim()||null;
+
+  // 1. Update localStorage state immediately so UI reflects the change
   RockoCore.updateAgent(currentAgentId,{
-    name:(_gEl('editorName')||{value:''}).value,
-    role:(_gEl('editorRole')||{value:''}).value,
-    model_override:(_gEl('editorModelOverride')||{value:''}).value.trim()||null,
-    description:(_gEl('editorDesc')||{value:''}).value,
+    name:updatedName,
+    role:updatedRole,
+    model_override:updatedModelOverride,
+    description:updatedDesc,
     instructions:instructions,
     _instructions:instructions,
     pipeline_step:pipelineStep,
@@ -108,12 +114,16 @@ function saveAgent(){
     project_tools:['filesystem','http']
   });
 
-  // Patch manifest agent def so export/rebuild sees fresh instructions + local_code
+  // 2. Patch manifest agent def so export/rebuild sees fresh instructions + local_code.
+  //    FIX: set both def.instructions AND def._instructions — previously only _instructions
+  //    (underscore prefix) was set, which the bridge's file-resolution path never read,
+  //    causing instructions to revert to the stale AGENT.md on every restart.
   const proj=RockoCore.getActiveProject();
   const manifest=RockoCore.getProject(proj);
   if(manifest&&Array.isArray(manifest.agents)){
     const def=manifest.agents.find(d=>d&&d.id===currentAgentId);
     if(def){
+      def.instructions=instructions;   // was def._instructions only — FIXED
       def._instructions=instructions;
       if(scriptPath||entryPoint) def.local_code=updatedLc;
     }
@@ -123,8 +133,38 @@ function saveAgent(){
     const step=manifest.pipeline.execution_order.find(s=>s.agent_id===currentAgentId);
     if(step){step.outputs_to=editorConns;if(pipelineStep)step.step_id=pipelineStep;}
   }
-  // Second saveState — updateAgent saved BEFORE def._instructions was patched above
+  // Second saveState — updateAgent saved BEFORE manifest def was patched above
   RockoCore.saveState();
+
+  // 3. Persist to bridge — writes AGENT.md to disk AND saves project.json.
+  //    This is the critical missing step: without it, instructions only lived in
+  //    localStorage and were lost on every bridge restart (most visibly the CEO agent).
+  const _bridgeBase=(typeof BRIDGE_URL!=='undefined'&&BRIDGE_URL)
+    ? BRIDGE_URL.replace(/\/$/,'')
+    : 'http://127.0.0.1:8787';
+  fetch(_bridgeBase+'/agents/'+encodeURIComponent(currentAgentId),{
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      name:updatedName,
+      role:updatedRole,
+      description:updatedDesc,
+      model_override:updatedModelOverride,
+      instructions:instructions,
+      pipeline_step:pipelineStep,
+      status:editorStatus,
+      connections:editorConns,
+      outputs_to:editorConns,
+      skills:tagList,
+      local_code:updatedLc
+    })
+  }).then(function(r){
+    if(!r.ok){
+      console.warn('[RockoAgents] Bridge agent save returned',r.status,'for',currentAgentId);
+    }
+  }).catch(function(e){
+    console.warn('[RockoAgents] Bridge agent save failed (bridge may not be running):',e.message||e);
+  });
 
   if(h){h.textContent='✓ Saved';h.style.color='var(--green)';}
   refreshAll();

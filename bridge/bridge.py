@@ -2392,6 +2392,64 @@ def get_agent_effective_instructions(agent_id: str):
     effective = _build_effective_instructions(agent_id)
     return {"agent_id": agent_id, "instructions": effective, "length": len(effective)}
 
+@app.patch("/agents/{agent_id}")
+async def update_agent(agent_id: str, request: Request):
+    """
+    Persist agent edits (name, role, description, instructions, model_override, status, etc).
+    Writes instructions to the agent's AGENT.md file on disk so they survive bridge restarts.
+    Also saves project.json so the in-memory manifest is durable.
+    This is the missing link that caused CEO (and all agent) instructions to be lost on restart.
+    """
+    global PROJECT
+    if not PROJECT:
+        raise HTTPException(503, "No project loaded")
+
+    body = await request.json()
+    agent = next((a for a in PROJECT.get("agents", []) if a.get("id") == agent_id), None)
+    if not agent:
+        raise HTTPException(404, f"Agent not found: {agent_id}")
+
+    # Update editable fields in-memory
+    editable = (
+        "name", "display_name", "role", "description", "status",
+        "model_override", "pipeline_step", "connections", "outputs_to",
+        "local_code", "skills", "tags",
+    )
+    for key in editable:
+        if key in body:
+            agent[key] = body[key]
+
+    # Instructions — store in both fields so every resolution path finds them
+    instructions = body.get("instructions")
+    if instructions is not None:
+        agent["instructions"]  = instructions
+        agent["_instructions"] = instructions
+
+        # Resolve the AGENT.md path on disk
+        instr_file = agent.get("instruction_file", "")
+        if instr_file and PROJECT_ROOT:
+            # Normalise both Windows and POSIX separators
+            rel = instr_file.replace("\\\\", "/").replace("\\", "/")
+            fp  = Path(PROJECT_ROOT) / rel
+        else:
+            # Derive a default path if instruction_file was never set
+            fp = Path(PROJECT_ROOT) / "agents" / agent_id / "AGENT.md"
+            rel = f"agents/{agent_id}/AGENT.md"
+            agent["instruction_file"] = rel.replace("/", "\\")  # keep Windows-style for consistency
+
+        try:
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp.write_text(instructions, encoding="utf-8")
+            _log("info", f"Agent instructions written to disk: {fp}")
+        except Exception as e:
+            _log("warn", f"Could not write AGENT.md for {agent_id}: {e}")
+
+    # Persist project.json so changes survive restarts
+    _save_project(f"agent updated via UI: {agent_id}")
+    _mark_routing_dirty(f"agent updated: {agent_id}")
+
+    return {"ok": True, "agent_id": agent_id, "agent": agent}
+
 @app.post("/agents/{agent_id}/skills/assign")
 async def assign_agent_skills(agent_id: str, request: Request):
     body   = await request.json()
