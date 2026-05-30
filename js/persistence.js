@@ -84,16 +84,16 @@ async function _pgGet(key) {
 async function _pgSet(key, value) {
   if (!_pgReady || !_pgdb) return false;
   try {
-    await _pgdb.exec(
+    await _pgdb.query(
       'INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value',
       [key, typeof value === 'string' ? value : JSON.stringify(value)]
     );
     return true;
-  } catch { return false; }
+  } catch(e) { console.warn('PGlite _pgSet error:', e); return false; }
 }
 async function _pgDelete(key) {
   if (!_pgReady || !_pgdb) return;
-  try { await _pgdb.exec('DELETE FROM kv WHERE key = $1', [key]); } catch {}
+  try { await _pgdb.query('DELETE FROM kv WHERE key = $1', [key]); } catch(e) { console.warn('PGlite _pgDelete error:', e); }
 }
 
 // ── Company persistence via PGlite ────────────────────────────
@@ -102,7 +102,7 @@ async function _pgSaveCompany(co) {
   var lean = Object.assign({}, co);
   delete lean._manifest;
   try {
-    await _pgdb.exec(
+    await _pgdb.query(
       'INSERT INTO companies (id, user_id, active, data) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET user_id=EXCLUDED.user_id, active=EXCLUDED.active, data=EXCLUDED.data',
       [co.id, co.user_id||'', co.active ? 1 : 0, JSON.stringify(lean)]
     );
@@ -121,7 +121,7 @@ async function _pgLoadCompanies() {
 }
 async function _pgDeleteCompany(id) {
   if (!_pgReady || !_pgdb) return;
-  try { await _pgdb.exec('DELETE FROM companies WHERE id = $1', [id]); } catch {}
+  try { await _pgdb.query('DELETE FROM companies WHERE id = $1', [id]); } catch(e) { console.warn('PGlite _pgDeleteCompany error:', e); }
 }
 
 // ── Override getCompanies / saveCompanies to use PGlite ──────────────────────
@@ -255,9 +255,10 @@ function pgWrite(key, value) {
   }
   // Async durable write to PGlite
   if (_pgReady) {
-    _pgSet(key, value);
+    _pgSet(key, value).catch(function(e){ console.warn('pgWrite async error:', e); });
   } else {
-    _pgQueue.push({key: key, val: value});
+    // Queue as a function so the boot flush can call it
+    (function(k, v){ _pgQueue.push(function(){ return _pgSet(k, v); }); })(key, value);
   }
 }
 

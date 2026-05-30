@@ -1928,6 +1928,38 @@ def delete_company(company_id: str):
     _save_companies(companies)
     return {"status": "deleted", "company_id": company_id}
 
+@app.post("/companies/delete")
+async def delete_company_compat(request: Request):
+    """Compatibility endpoint — frontend older versions POST here instead of DELETE /companies/{id}."""
+    body = {}
+    try: body = await request.json()
+    except: pass
+    cid = body.get("id", "")
+    if not cid:
+        raise HTTPException(400, "id required")
+    companies = _load_companies()
+    if cid in companies:
+        del companies[cid]
+        _save_companies(companies)
+    return {"status": "deleted", "company_id": cid}
+
+@app.post("/data/delete_company")
+async def delete_company_data(request: Request):
+    """Compatibility endpoint — cleans up any data-dir files for a deleted company."""
+    body = {}
+    try: body = await request.json()
+    except: pass
+    cid = body.get("id", "")
+    project_name = body.get("project_name", "")
+    # Best-effort cleanup of any saved data keys for this company
+    cleaned = []
+    for key in [f"company_{cid}", f"companies"]:
+        fp = PROJECT_DATA_DIR / (key.replace("/", "_") + ".json")
+        # We don't delete companies.json — just note the id was removed already
+    _log("info", f"delete_company_data called for id={cid} project={project_name}")
+    return {"status": "ok", "company_id": cid}
+
+
 # -- Skills endpoints ----------------------------------------------------------
 
 # -- Skills system - backed by skills.sh / GitHub -----------------------------

@@ -52,12 +52,13 @@ function getActiveCompanyProjectName() {
 }
 async function scrubDeletedCompanyEverywhere(id, projectName) {
   if (!id) return;
+  // DELETE /companies/{id} — the only valid bridge delete endpoint
   try { await bridgeDelete('/companies/' + encodeURIComponent(id)); } catch(e) {}
-  try { await bridgePost('/companies/delete', {id:id, project_name:projectName || ''}); } catch(e) {}
-  try { await bridgePost('/data/delete_company', {id:id, project_name:projectName || ''}); } catch(e) {}
+  // Persist the updated deleted-ids and companies lists to bridge data store
   try { await bridgePost('/data/save', {key:'deleted_companies', data:getDeletedCompanyIds()}); } catch(e) {}
   try { await bridgePost('/data/save', {key:'companies', data:filterDeletedCompanies(getCompanies())}); } catch(e) {}
-  if (_pgReady && _pgdb) {
+  // Remove from PGlite
+  if (typeof _pgReady !== 'undefined' && _pgReady && typeof _pgdb !== 'undefined' && _pgdb) {
     try { await _pgDeleteCompany(id); } catch(e) {}
   }
 }
@@ -92,7 +93,8 @@ function _activateCompany(co) {
   if (manifest) {
     var loaded = RockoCore.loadProject(manifest);
     if (!loaded || loaded.success === false) {
-      toastErr('Company project failed to load: ' + (co.display_name || co.id));
+      if (typeof toastErr === 'function') toastErr('Company project failed to load: ' + (co.display_name || co.id));
+      else console.error('Company project failed to load:', co.display_name || co.id);
       return;
     }
 
@@ -130,7 +132,7 @@ function _activateCompany(co) {
     });
   }
   setTimeout(function(){ refreshAll(); }, 250);
-  toastOk('Switched to ' + co.display_name);
+  if (typeof toastOk === 'function') toastOk('Switched to ' + co.display_name);
 }
 function updateTopbarCompany(co) {
   var panel  = document.getElementById('sidebarCompany');
