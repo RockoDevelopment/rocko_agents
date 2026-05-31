@@ -639,8 +639,15 @@ async function _rehydrateCompaniesFromBridge() {
     var res = await fetch('http://127.0.0.1:8787/companies', {signal: AbortSignal.timeout(4000)});
     if (!res.ok) return;
     var d = await res.json();
-    var bridgeCompanies = d.companies || d;
-    if (!Array.isArray(bridgeCompanies) || !bridgeCompanies.length) return;
+    var raw = d.companies || d;
+    if (!Array.isArray(raw) || !raw.length) return;
+
+    // Never resurrect companies the user has explicitly deleted
+    var deletedIds = typeof getDeletedCompanyIds === 'function' ? getDeletedCompanyIds() : [];
+    var bridgeCompanies = raw.filter(function(bc){
+      return deletedIds.indexOf(bc.id) === -1;
+    });
+    if (!bridgeCompanies.length) return;
 
     // Merge bridge data into the local company list, updating manifests
     var local = getCompanies();

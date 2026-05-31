@@ -532,6 +532,25 @@ def get_logs(limit: int = 100):
 @app.post("/data/save")
 def data_save(req: DataSaveRequest):
     try:
+        # Special case: frontend posts deleted_companies list — sync to bridge blocklist
+        if req.key == "deleted_companies":
+            ids = req.data if isinstance(req.data, list) else []
+            existing = _get_deleted_company_ids()
+            merged = existing | set(str(i) for i in ids)
+            if merged != existing:
+                _deleted_companies_file().parent.mkdir(parents=True, exist_ok=True)
+                with open(_deleted_companies_file(), 'w', encoding="utf-8") as fp:
+                    json.dump(list(merged), fp)
+                # Also remove any newly-deleted ids from companies.json right now
+                companies = _read_companies_file(_companies_file())
+                changed = False
+                for cid in merged:
+                    if cid in companies:
+                        del companies[cid]
+                        changed = True
+                if changed:
+                    _save_companies(companies)
+            return {"ok": True}
         fp = PROJECT_DATA_DIR / (req.key.replace("/", "_") + ".json")
         with open(fp, "w") as f: json.dump(req.data, f, indent=2)
         return {"ok": True, "path": str(fp)}
@@ -1765,8 +1784,37 @@ def _read_companies_file(fp: Path) -> dict:
         _log("warn", f"Could not read companies file {fp}: {e}")
         return {}
 
+def _deleted_companies_file() -> Path:
+    """Persistent list of company IDs the user has explicitly deleted.
+    Used to prevent recovery logic from resurrecting them."""
+    return _companies_file().parent / "deleted_companies.json"
+
+def _get_deleted_company_ids() -> set:
+    fp = _deleted_companies_file()
+    if not fp.exists():
+        return set()
+    try:
+        return set(json.load(open(fp, encoding="utf-8")))
+    except Exception:
+        return set()
+
+def _mark_company_deleted(company_id: str):
+    ids = _get_deleted_company_ids()
+    ids.add(company_id)
+    _deleted_companies_file().parent.mkdir(parents=True, exist_ok=True)
+    with open(_deleted_companies_file(), 'w', encoding="utf-8") as fp:
+        json.dump(list(ids), fp)
+
 def _load_companies() -> dict:
     companies = _read_companies_file(_companies_file())
+
+    # Load the deleted-IDs blocklist — never allow these back regardless of recovery source
+    deleted_ids = _get_deleted_company_ids()
+
+    # Remove any deleted companies that snuck back into the main file
+    for cid in list(companies.keys()):
+        if cid in deleted_ids:
+            del companies[cid]
 
     # Backward compatibility: recover companies that older builds wrote to
     # project-scoped folders or nearby app folders instead of APP_DATA_DIR.
@@ -1775,6 +1823,8 @@ def _load_companies() -> dict:
         legacy = _read_companies_file(d / "companies.json")
         for cid, co in legacy.items():
             if not isinstance(co, dict):
+                continue
+            if cid in deleted_ids:          # ← skip explicitly deleted companies
                 continue
             if cid not in companies:
                 companies[cid] = co
@@ -1809,6 +1859,8 @@ def _load_companies() -> dict:
                 parsed = _normalise_companies_payload(raw_cos)
                 state_added = 0
                 for cid, co in parsed.items():
+                    if cid in deleted_ids:  # ← skip explicitly deleted companies
+                        continue
                     if isinstance(co, dict) and cid not in companies:
                         companies[cid] = co
                         state_added += 1
@@ -1925,6 +1977,7 @@ def delete_company(company_id: str):
     companies = _load_companies()
     if company_id not in companies: raise HTTPException(404, "Company not found")
     del companies[company_id]
+    _mark_company_deleted(company_id)
     _save_companies(companies)
     return {"status": "deleted", "company_id": company_id}
 
@@ -1941,6 +1994,7 @@ async def delete_company_compat(request: Request):
     if cid in companies:
         del companies[cid]
         _save_companies(companies)
+    _mark_company_deleted(cid)
     return {"status": "deleted", "company_id": cid}
 
 @app.post("/data/delete_company")
@@ -1951,11 +2005,12 @@ async def delete_company_data(request: Request):
     except: pass
     cid = body.get("id", "")
     project_name = body.get("project_name", "")
-    # Best-effort cleanup of any saved data keys for this company
-    cleaned = []
-    for key in [f"company_{cid}", f"companies"]:
-        fp = PROJECT_DATA_DIR / (key.replace("/", "_") + ".json")
-        # We don't delete companies.json — just note the id was removed already
+    if cid:
+        _mark_company_deleted(cid)
+        companies = _load_companies()
+        if cid in companies:
+            del companies[cid]
+            _save_companies(companies)
     _log("info", f"delete_company_data called for id={cid} project={project_name}")
     return {"status": "ok", "company_id": cid}
 
