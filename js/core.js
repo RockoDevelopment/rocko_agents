@@ -16,12 +16,108 @@ const RockoCore = (() => {
 
   // ── Persistence ──────────────────────────────────────────────
   const SK='rockoagents_v4';
+
+  /** Strip everything that makes the state blob large before writing to localStorage.
+   *  - Projects: keep only lightweight metadata, drop full manifest bodies.
+   *    The bridge is the source of truth for full manifests.
+   *  - Agents: keep instructions but cap at 8 KB each to prevent quota blowout.
+   *  - Run history: already capped at 50, but trim step output text too.
+   *  Full state (including manifests) is always written to the bridge via _syncToFile.
+   */
+  function _slimStateForStorage(s){
+    // Slim projects — drop the heavy embedded data from each manifest
+    var slimProjects={};
+    Object.keys(s.projects||{}).forEach(function(pname){
+      var m=s.projects[pname];
+      if(!m){return;}
+      // Keep project identity + model config + pipeline DAG shape, drop agent _instructions blobs
+      var slimAgents=(m.agents||[]).map(function(a){
+        var sa=Object.assign({},a);
+        delete sa._instructions;
+        delete sa._base_instructions;
+        // Keep instruction_file path so bridge can reload from disk
+        return sa;
+      });
+      slimProjects[pname]={
+        schema_version:m.schema_version,
+        project:m.project,
+        model:m.model,
+        paths:m.paths,
+        tools:m.tools,
+        apis:m.apis,
+        executors:m.executors,
+        env:m.env,
+        pipeline:m.pipeline,
+        agents:slimAgents
+        // deliberately omitting: vault, databases, logs, validation — bridge has these
+      };
+    });
+
+    // Slim agents — cap instructions at 8 KB each; full text lives on bridge disk
+    var slimAgents={};
+    var MAX_INSTR=8192;
+    Object.keys(s.agents||{}).forEach(function(id){
+      var a=s.agents[id];
+      if(!a){return;}
+      var sa=Object.assign({},a);
+      if(sa.instructions&&sa.instructions.length>MAX_INSTR){
+        sa.instructions=sa.instructions.slice(0,MAX_INSTR);
+        sa._instructions_truncated=true;
+      }
+      if(sa._instructions&&sa._instructions.length>MAX_INSTR){
+        sa._instructions=sa._instructions.slice(0,MAX_INSTR);
+      }
+      delete sa._base_instructions; // always redundant with instructions
+      slimAgents[id]=sa;
+    });
+
+    // Slim run history — drop raw step output text (kept on bridge)
+    var slimHistory=(s.runHistory||[]).slice(0,20).map(function(r){
+      var sr=Object.assign({},r);
+      if(sr.steps){
+        var trimmedSteps={};
+        Object.keys(sr.steps).forEach(function(sid){
+          var step=Object.assign({},sr.steps[sid]);
+          if(step.raw_text&&step.raw_text.length>500) step.raw_text=step.raw_text.slice(0,500)+'…';
+          if(step.output&&typeof step.output==='string'&&step.output.length>500) step.output=step.output.slice(0,500)+'…';
+          trimmedSteps[sid]=step;
+        });
+        sr.steps=trimmedSteps;
+      }
+      return sr;
+    });
+
+    return {
+      active:s.active,
+      projects:slimProjects,
+      agents:slimAgents,
+      tasks:s.tasks,
+      taskSeq:s.taskSeq,
+      runHistory:slimHistory,
+      saved_at:s.saved_at
+    };
+  }
+
   function saveState(){
     try{
       const s={active:_active,projects:_projects,agents:_agents,tasks:_tasks,taskSeq:_taskSeq,
                runHistory:_runHistory.slice(0,50),saved_at:new Date().toISOString()};
-      localStorage.setItem(SK,JSON.stringify(s));
+      // Always sync full state to bridge first (no size limit)
       _syncToFile(s);
+      // Write slim version to localStorage (quota-safe)
+      const slim=_slimStateForStorage(s);
+      try{
+        localStorage.setItem(SK,JSON.stringify(slim));
+      }catch(quotaErr){
+        // Quota still hit — evict tasks and history and try once more
+        log('warn','localStorage quota: evicting tasks+history and retrying');
+        slim.tasks={};slim.runHistory=[];
+        try{
+          localStorage.setItem(SK,JSON.stringify(slim));
+        }catch(e2){
+          log('warn','localStorage full even after eviction — state lives on bridge only');
+        }
+      }
     }catch(e){log('warn','Persist error: '+e.message);}
   }
   async function _syncToFile(state){
@@ -35,8 +131,30 @@ const RockoCore = (() => {
       const s=JSON.parse(raw); if(!s.projects)return false;
       _projects=s.projects||{};_agents=s.agents||{};_tasks=s.tasks||{};
       _taskSeq=s.taskSeq||0;_runHistory=s.runHistory||[];_active=s.active;
-      log('success',`State restored (${(s.saved_at||'').split('T')[0]})`); return true;
+      log('success',`State restored (${(s.saved_at||'').split('T')[0]})`);
+      // Rehydrate any truncated agent instructions from bridge in the background
+      _rehydrateInstructionsFromBridge();
+      return true;
     }catch(e){log('warn','Load error: '+e.message);return false;}
+  }
+  async function _rehydrateInstructionsFromBridge(){
+    if(!_bridgeOk)return;
+    const truncated=Object.values(_agents).filter(a=>a&&a._instructions_truncated);
+    if(!truncated.length)return;
+    for(const agent of truncated){
+      try{
+        const res=await fetch(`${_bridgeUrl}/agents/${agent.id}/instructions`,{signal:AbortSignal.timeout(3000)});
+        if(res.ok){
+          const d=await res.json();
+          if(d.instructions){
+            _agents[agent.id].instructions=d.instructions;
+            _agents[agent.id]._instructions=d.instructions;
+            delete _agents[agent.id]._instructions_truncated;
+            log('info','Rehydrated instructions for: '+agent.id);
+          }
+        }
+      }catch{}
+    }
   }
   function clearState(){
     localStorage.removeItem(SK);

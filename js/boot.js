@@ -629,4 +629,64 @@ fullBoot();
 
 document.addEventListener('DOMContentLoaded', function(){
   if (typeof restoreRockoStateOnBoot === 'function') restoreRockoStateOnBoot();
+  // After state is restored, rehydrate company manifests from bridge.
+  // This means _manifest never needs to live in localStorage — the bridge is the source of truth.
+  _rehydrateCompaniesFromBridge();
 });
+
+async function _rehydrateCompaniesFromBridge() {
+  try {
+    var res = await fetch('http://127.0.0.1:8787/companies', {signal: AbortSignal.timeout(4000)});
+    if (!res.ok) return;
+    var d = await res.json();
+    var bridgeCompanies = d.companies || d;
+    if (!Array.isArray(bridgeCompanies) || !bridgeCompanies.length) return;
+
+    // Merge bridge data into the local company list, updating manifests
+    var local = getCompanies();
+    var merged = bridgeCompanies.map(function(bc) {
+      var existing = local.find(function(lc){ return lc.id === bc.id; }) || {};
+      // Bridge company is authoritative for manifest/project data;
+      // local is authoritative for active state and logo
+      return Object.assign({}, bc, {
+        active: existing.active || bc.active || false,
+        logo: existing.logo || bc.logo || null
+      });
+    });
+
+    // Preserve active flag from local if set
+    var localActive = local.find(function(c){ return c.active; });
+    if (localActive) {
+      merged.forEach(function(c){ c.active = c.id === localActive.id; });
+    } else if (merged.length) {
+      merged[0].active = true;
+    }
+
+    // Write slim version (no _manifest) to localStorage
+    var slim = merged.map(function(c){
+      var s = Object.assign({}, c);
+      delete s._manifest;
+      return s;
+    });
+    try { localStorage.setItem('rockoagents_companies_v1', JSON.stringify(slim)); } catch(e) {}
+
+    // Keep _manifest in memory cache only
+    if (typeof _companiesCache !== 'undefined') {
+      _companiesCache = merged;
+    }
+
+    // If no company is currently active in RockoCore, activate the first one
+    var activeCo = merged.find(function(c){ return c.active; }) || merged[0];
+    if (activeCo && typeof _activateCompany === 'function') {
+      if (!RockoCore.getActiveProject()) {
+        _activateCompany(activeCo);
+      }
+    }
+
+    RockoCore.log('info', 'Companies rehydrated from bridge: ' + merged.length);
+    if (typeof renderCompanyRail === 'function') renderCompanyRail();
+    if (activeCo && typeof updateTopbarCompany === 'function') updateTopbarCompany(activeCo);
+  } catch(e) {
+    // Bridge offline — silently continue with whatever localStorage has
+  }
+}

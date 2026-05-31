@@ -140,28 +140,40 @@ getCompanies = function() {
 var _origSaveCompanies = saveCompanies;
 saveCompanies = function(list) {
   list = filterDeletedCompanies(list || []);
+  // Slim: strip _manifest AND large base64 logo blobs from localStorage copy.
+  // _manifest is rehydrated from bridge on boot. Logos are kept in memory cache only.
   var lean = (list || []).map(function(c){
     var x = Object.assign({}, c);
     delete x._manifest;
+    // Only strip logo from the localStorage copy if it's large (base64 data URL)
+    if (x.logo && x.logo.length > 2048) delete x.logo;
     return x;
   });
 
+  // Memory cache always keeps full objects (including logo + _manifest)
   _companiesCache = list || [];
 
   try {
     localStorage.setItem(COMPANIES_KEY, JSON.stringify(lean));
   } catch(e) {
     try {
+      // Still too big — try without any optional fields
+      var minimal = lean.map(function(c){
+        return {id:c.id, display_name:c.display_name, description:c.description,
+                project_path:c.project_path, active:c.active, created_at:c.created_at,
+                default_provider:c.default_provider, default_model:c.default_model};
+      });
       localStorage.removeItem(COMPANIES_KEY);
-      localStorage.setItem(COMPANIES_KEY, JSON.stringify(lean));
+      localStorage.setItem(COMPANIES_KEY, JSON.stringify(minimal));
     } catch(e2) {
-      console.warn('localStorage quota exceeded');
+      console.warn('localStorage quota exceeded for companies — bridge is source of truth');
     }
   }
 
   if (_pgReady && _pgdb) {
     (async function(){
       try {
+        // exec() is fine here — no params
         await _pgdb.exec('DELETE FROM companies');
         for (var i = 0; i < (list || []).length; i++) {
           await _pgSaveCompany(list[i]);
